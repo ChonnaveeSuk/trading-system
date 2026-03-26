@@ -4,6 +4,7 @@
 // Rule: Decimal for ALL prices, quantities, P&L. Never f64 for financial values.
 
 use chrono::{DateTime, Utc};
+use rust_decimal::prelude::Signed;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

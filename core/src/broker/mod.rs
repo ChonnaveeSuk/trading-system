@@ -9,10 +9,8 @@ use async_trait::async_trait;
 
 use crate::{
     error::TradingError,
-    types::{Fill, Order},
+    types::Order,
 };
-
-// TODO Phase 1: add async_trait to Cargo.toml
 
 /// Broker trait — paper simulator and IBKR both implement this.
 /// The order manager holds a Box<dyn Broker> and never cares which is active.
@@ -28,5 +26,5 @@ pub trait Broker: Send + Sync {
     async fn health_check(&self) -> Result<(), TradingError>;
 }
 
-// TODO Phase 1: pub mod paper;
-// TODO Phase 1: pub mod ibkr;
+pub mod ibkr;
+pub mod paper;

@@ -25,10 +25,20 @@ serde               = { workspace = true }
 serde_json          = { workspace = true }
 uuid                = { workspace = true }
 chrono              = { workspace = true }
+async-trait         = { workspace = true }
+
+# Random number generation (latency jitter in paper broker)
+rand = "0.8"
+
+# Async stream utilities (for Redis pub/sub)
+futures = "0.3"
+
+# Base64 encoding (GCP Pub/Sub message payload)
+base64 = "0.22"
 
 # Database (hot storage)
 sqlx = { version = "0.8", features = [
-    "postgres", "runtime-tokio-native-tls",
+    "postgres", "runtime-tokio-rustls",
     "uuid", "chrono", "rust_decimal",
 ] }
 

@@ -47,7 +47,7 @@ pub enum TradingError {
 
 /// Granular risk violations — returned by RiskEngine::check_order.
 /// Each variant maps to a distinct, actionable condition.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum RiskError {
     /// Daily loss limit breached — ALL trading halted until reset.
     #[error(

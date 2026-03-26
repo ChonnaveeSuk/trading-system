@@ -16,7 +16,7 @@
 //       }
 //   });
 
-// TODO Phase 1: pub mod pubsub;
+pub mod pubsub;
 
 /// GCP project configuration.
 #[derive(Debug, Clone)]

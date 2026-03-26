@@ -92,6 +92,9 @@ impl RiskEngine {
     /// - `open_order_count`   — Number of currently pending/submitted orders.
     /// - `daily_pnl`          — Today's realized + unrealized P&L (negative = loss).
     /// - `peak_portfolio_value` — Highest portfolio value since inception/reset.
+    ///
+    /// ADR-003: stateless design intentionally requires all state as arguments.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_order(
         &self,
         order: &Order,

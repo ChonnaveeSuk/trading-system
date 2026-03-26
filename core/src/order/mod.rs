@@ -59,4 +59,4 @@ pub trait OrderManager: Send + Sync {
     ) -> impl std::future::Future<Output = Result<OrderStatus, TradingError>> + Send;
 }
 
-// TODO Phase 1: pub mod manager;
+pub mod manager;
