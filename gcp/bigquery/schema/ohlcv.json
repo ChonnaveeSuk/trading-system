@@ -1,0 +1,57 @@
+[
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Ticker symbol"
+  },
+  {
+    "name": "timestamp",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Bar open timestamp (UTC). Partition key."
+  },
+  {
+    "name": "timeframe",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Bar timeframe: 1m, 5m, 15m, 1h, 1d"
+  },
+  {
+    "name": "open",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "high",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "low",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "close",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "volume",
+    "type": "NUMERIC",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "vwap",
+    "type": "NUMERIC",
+    "mode": "NULLABLE",
+    "description": "Volume-weighted average price for the bar"
+  },
+  {
+    "name": "source",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Data source: ibkr, polygon, yfinance"
+  }
+]

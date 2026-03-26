@@ -1,0 +1,54 @@
+[
+  {
+    "name": "signal_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "UUID matching PostgreSQL signals.signal_id"
+  },
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "strategy_id",
+    "type": "STRING",
+    "mode": "REQUIRED"
+  },
+  {
+    "name": "score",
+    "type": "FLOAT64",
+    "mode": "REQUIRED",
+    "description": "Signal confidence [0.0, 1.0]"
+  },
+  {
+    "name": "direction",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "BUY, SELL, or HOLD"
+  },
+  {
+    "name": "features",
+    "type": "JSON",
+    "mode": "NULLABLE",
+    "description": "Feature vector as JSON for ML reproducibility"
+  },
+  {
+    "name": "acted_on",
+    "type": "BOOL",
+    "mode": "REQUIRED",
+    "description": "Whether this signal resulted in an order submission"
+  },
+  {
+    "name": "reject_reason",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Risk engine rejection reason if acted_on = false"
+  },
+  {
+    "name": "created_at",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Signal generation timestamp (UTC). Partition key."
+  }
+]

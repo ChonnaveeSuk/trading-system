@@ -1,0 +1,46 @@
+# trading-system/core/Cargo.toml
+[package]
+name        = "quantai-core"
+description = "QuantAI execution engine — Rust core (broker, risk, OMS)"
+version.workspace    = true
+edition.workspace    = true
+
+[[bin]]
+name = "quantai"
+path = "src/main.rs"
+
+[lib]
+name = "quantai_core"
+path = "src/lib.rs"
+
+[dependencies]
+rust_decimal        = { workspace = true }
+rust_decimal_macros = { workspace = true }
+tokio               = { workspace = true }
+thiserror           = { workspace = true }
+anyhow              = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+uuid                = { workspace = true }
+chrono              = { workspace = true }
+
+# Database (hot storage)
+sqlx = { version = "0.8", features = [
+    "postgres", "runtime-tokio-native-tls",
+    "uuid", "chrono", "rust_decimal",
+] }
+
+# Redis (real-time cache)
+redis = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
+
+# gRPC bridge
+tonic = "0.12"
+prost = "0.13"
+
+# HTTP client (GCP Pub/Sub REST + health checks)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[dev-dependencies]
+tokio-test = "0.4"

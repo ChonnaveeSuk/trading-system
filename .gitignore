@@ -1,0 +1,55 @@
+# trading-system/.gitignore
+
+# ── SECRETS — never commit ────────────────────────────────────────────────────
+.env
+*.key
+*.pem
+*service-account*.json
+*credentials*.json
+gcp/terraform/*.tfvars       # Contains real project IDs and secrets
+!gcp/terraform/*.tfvars.example
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+target/
+Cargo.lock                   # Keep for binaries, remove if publishing lib
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfstate.*.backup
+crash.log
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Data files (use BigQuery / GCS instead) ───────────────────────────────────
+*.csv
+*.parquet
+*.pkl
+data/

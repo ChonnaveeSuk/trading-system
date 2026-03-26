@@ -1,0 +1,80 @@
+[
+  {
+    "name": "fill_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "UUID of the fill (matches PostgreSQL fills.fill_id)"
+  },
+  {
+    "name": "client_order_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Client-generated order UUID"
+  },
+  {
+    "name": "broker_order_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Broker-assigned order ID (IBKR)"
+  },
+  {
+    "name": "symbol",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Ticker symbol (e.g. AAPL, BTC-USD)"
+  },
+  {
+    "name": "side",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "BUY or SELL"
+  },
+  {
+    "name": "filled_quantity",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Shares/units filled. NUMERIC preserves precision."
+  },
+  {
+    "name": "fill_price",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Execution price. NUMERIC not FLOAT64 to avoid rounding."
+  },
+  {
+    "name": "gross_value",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "filled_quantity * fill_price"
+  },
+  {
+    "name": "commission",
+    "type": "NUMERIC",
+    "mode": "REQUIRED",
+    "description": "Broker commission for this fill"
+  },
+  {
+    "name": "strategy_id",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Strategy that generated the signal"
+  },
+  {
+    "name": "signal_score",
+    "type": "FLOAT64",
+    "mode": "NULLABLE",
+    "description": "Signal confidence score [0.0, 1.0]. FLOAT64 acceptable for ratios."
+  },
+  {
+    "name": "timestamp",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "Fill execution timestamp (UTC). Partition key."
+  },
+  {
+    "name": "trading_mode",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "paper or live — must be 'paper' for all Phase 0-3 records"
+  }
+]

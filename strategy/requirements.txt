@@ -1,0 +1,45 @@
+# trading-system/strategy/requirements.txt
+#
+# Pin major versions. Update deliberately, never automatically.
+
+# GCP
+google-cloud-bigquery==3.25.0
+google-cloud-pubsub==2.24.0
+google-cloud-secret-manager==2.20.0
+google-cloud-storage==2.18.2
+google-auth==2.35.0
+
+# Data & ML
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+scipy==1.14.1
+
+# Financial data
+# ibapi is installed manually from IBKR TWS API download (not on PyPI)
+yfinance==0.2.44        # Fallback data source for backtesting only
+
+# Decimal precision
+# Use Python's built-in decimal module — no extra package needed
+
+# API / gRPC bridge
+grpcio==1.67.1
+grpcio-tools==1.67.1
+protobuf==5.28.3
+
+# Backtesting
+# vectorbt is optional — heavy dependency, install separately if needed
+# vectorbt==0.26.2
+
+# Utilities
+python-dateutil==2.9.0
+pytz==2024.2
+tqdm==4.67.1
+
+# Development / testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+black==24.10.0
+ruff==0.8.1
+mypy==1.13.0
