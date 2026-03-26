@@ -25,6 +25,29 @@ output "gcs_backup_bucket" {
   value       = google_storage_bucket.backups.name
 }
 
+output "fills_bq_subscription" {
+  description = "Pub/Sub subscription streaming fills to BigQuery"
+  value       = google_pubsub_subscription.fills_to_bq.id
+}
+
+output "populate_secrets_commands" {
+  description = "Run these once after terraform apply to set secret values"
+  sensitive   = true
+  value = <<-EOT
+    PROJECT=${var.project_id}
+
+    echo -n "paper"      | gcloud secrets versions add trading-mode         --data-file=- --project=$PROJECT
+    echo -n "7497"       | gcloud secrets versions add ibkr-paper-port      --data-file=- --project=$PROJECT
+    echo -n "127.0.0.1"  | gcloud secrets versions add ibkr-paper-host      --data-file=- --project=$PROJECT
+    echo -n "PLACEHOLDER" | gcloud secrets versions add ibkr-account-id     --data-file=- --project=$PROJECT
+
+    # Generate and store a strong postgres password:
+    PG_PASS=$(python3 -c "import secrets,string; print(secrets.token_urlsafe(32))")
+    echo -n "$PG_PASS" | gcloud secrets versions add quantai-postgres-password --data-file=- --project=$PROJECT
+    echo "Postgres password stored. Update .env POSTGRES_PASSWORD=$PG_PASS"
+  EOT
+}
+
 output "startup_verification_commands" {
   description = "Commands to run at each session startup"
   value = <<-EOT

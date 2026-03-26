@@ -6,9 +6,9 @@
 //   1. Initialize structured logging
 //   2. Verify TRADING_MODE=paper (abort if not)
 //   3. Connect PostgreSQL + Redis (health checks)
-//   4. Start paper broker + fill consumer task
-//   5. Start order manager (loads state from DB)
-//   6. Start GCP Pub/Sub client (non-fatal if unavailable)
+//   4. Initialize paper broker + OMS (loads state from DB)
+//   5. Wire GCP Pub/Sub into OMS (non-fatal if unavailable)
+//   6. Start fill consumer task (now has GCP wired)
 //   7. Run until shutdown signal (Ctrl-C / SIGTERM)
 
 use std::sync::Arc;
@@ -69,30 +69,55 @@ async fn main() -> Result<()> {
 
     info!("Connecting to Redis…");
     let feed_config = FeedConfig {
-        redis_url: redis_url.clone(),
+        redis_url,
         symbols: vec![],
         tick_ttl_secs: 86_400,
     };
-    let feed = RedisFeed::connect(feed_config).await.context("Failed to connect to Redis")?;
-    feed.ping().await.context("Redis ping failed")?;
+    let _feed = RedisFeed::connect(feed_config).await.context("Failed to connect to Redis")?;
+    _feed.ping().await.context("Redis ping failed")?;
     info!("Redis connected");
 
     // ── 5. Paper broker ───────────────────────────────────────────────────────
-    let (paper_broker, mut fill_rx) = PaperBroker::new(PaperConfig::default());
+    let (paper_broker, fill_rx) = PaperBroker::new(PaperConfig::default());
     let broker = Arc::new(paper_broker);
 
     // ── 6. Order manager ──────────────────────────────────────────────────────
-    // Starting capital: read from daily_pnl or use hardcoded $100,000 default.
     let starting_value = dec!(100_000);
     let oms = OmsManager::new(pool.clone(), broker.clone(), starting_value)
         .await
         .context("Failed to initialize OMS")?;
-    let oms_for_fills = oms.clone();
 
     info!("Order manager initialized (starting value: ${starting_value})");
 
-    // ── 7. Fill consumer task ─────────────────────────────────────────────────
-    // Drains fill_rx and forwards to OMS. Runs for the lifetime of the engine.
+    // ── 7. GCP Pub/Sub (non-fatal — per ADR-002) ─────────────────────────────
+    // Wire BEFORE spawning the fill consumer so the consumer gets the GCP-enabled OMS.
+    // If credentials aren't available, trading continues in local-only mode.
+    let oms = match GcpConfig::from_env() {
+        Err(e) => {
+            warn!("GCP_PROJECT_ID not set — running in local-only mode (non-fatal): {e}");
+            oms
+        }
+        Ok(gcp_config) => {
+            let http = reqwest::Client::new();
+            let pubsub = PubSubClient::new(gcp_config, http);
+            match pubsub.verify_connectivity().await {
+                Ok(()) => {
+                    info!("GCP Pub/Sub credentials verified — fills will stream to BigQuery");
+                    oms.with_pubsub(pubsub)
+                }
+                Err(e) => {
+                    warn!("GCP Pub/Sub unavailable — local-only mode (non-fatal): {e}");
+                    oms
+                }
+            }
+        }
+    };
+
+    // ── 8. Fill consumer task ─────────────────────────────────────────────────
+    // Drains fill_rx and forwards to OMS (which fire-and-forgets to GCP).
+    // Must be spawned AFTER GCP is wired so the OMS clone carries pubsub.
+    let oms_for_fills = oms.clone();
+    let mut fill_rx = fill_rx;
     tokio::spawn(async move {
         info!("Fill consumer task started");
         while let Some(fill) = fill_rx.recv().await {
@@ -103,23 +128,10 @@ async fn main() -> Result<()> {
         warn!("Fill consumer task exited — broker channel closed");
     });
 
-    // ── 8. GCP Pub/Sub (non-fatal) ────────────────────────────────────────────
-    match GcpConfig::from_env() {
-        Ok(gcp_config) => {
-            let http = reqwest::Client::new();
-            let pubsub = PubSubClient::new(gcp_config, http);
-            match pubsub.verify_connectivity().await {
-                Ok(()) => info!("GCP Pub/Sub credentials verified"),
-                Err(e) => warn!("GCP Pub/Sub unavailable (non-fatal): {e}"),
-            }
-        }
-        Err(e) => warn!("GCP config not set (non-fatal): {e}"),
-    }
-
     // ── 9. Ready ──────────────────────────────────────────────────────────────
     info!(
-        "QuantAI engine ready — paper trading mode active. \
-         Waiting for signals from strategy layer (Phase 2)."
+        pubsub_active = oms.has_pubsub(),
+        "QuantAI engine ready — paper trading active. Awaiting signals (Phase 2)."
     );
 
     // Wait for shutdown signal

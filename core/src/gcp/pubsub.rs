@@ -42,6 +42,82 @@ use crate::{
 use super::GcpConfig;
 
 // ──────────────────────────────────────────────────────────────────────────────
+// BigQuery record types
+//
+// These structs serialize to JSON that matches the BigQuery table schemas
+// in gcp/bigquery/schema/. The Pub/Sub → BigQuery subscription uses
+// use_table_schema=true, so field names must match exactly.
+//
+// NUMERIC BigQuery columns must be sent as strings (BQ auto-converts).
+// FLOAT64 columns (signal_score) are sent as JSON numbers.
+// TIMESTAMP columns are RFC3339 strings.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// BigQuery `trades` table record.
+///
+/// Constructed from a `Fill` + order metadata and published to `quantai-fills`.
+/// The Pub/Sub → BigQuery subscription streams this to the `trades` table.
+#[derive(Debug, Clone, Serialize)]
+pub struct FillBqRecord {
+    /// UUID string (matches PostgreSQL fills.fill_id)
+    pub fill_id: String,
+    pub client_order_id: String,
+    pub broker_order_id: Option<String>,
+    pub symbol: String,
+    pub side: String,
+    /// NUMERIC → string for BigQuery
+    pub filled_quantity: String,
+    pub fill_price: String,
+    pub gross_value: String,
+    pub commission: String,
+    pub strategy_id: Option<String>,
+    /// FLOAT64 — f64 is acceptable for signal scores per ADR-001
+    pub signal_score: Option<f64>,
+    /// RFC3339 timestamp string
+    pub timestamp: String,
+    /// Always "paper" for Phase 0–3 records
+    pub trading_mode: String,
+}
+
+impl FillBqRecord {
+    /// Construct from a Fill with supplemental fields from the originating order.
+    pub fn from_fill(
+        fill: &Fill,
+        strategy_id: Option<String>,
+        signal_score: Option<f64>,
+        trading_mode: &str,
+    ) -> Self {
+        let gross_value = fill.filled_quantity * fill.fill_price;
+        Self {
+            fill_id: fill.fill_id.to_string(),
+            client_order_id: fill.client_order_id.to_string(),
+            broker_order_id: fill.broker_order_id.clone(),
+            symbol: fill.symbol.clone(),
+            side: fill.side.to_string(),
+            filled_quantity: fill.filled_quantity.to_string(),
+            fill_price: fill.fill_price.to_string(),
+            gross_value: gross_value.to_string(),
+            commission: fill.commission.to_string(),
+            strategy_id,
+            signal_score,
+            timestamp: fill.timestamp.to_rfc3339(),
+            trading_mode: trading_mode.to_string(),
+        }
+    }
+}
+
+/// Risk event record published to `quantai-risk-events` topic.
+#[derive(Debug, Clone, Serialize)]
+pub struct RiskEventBqRecord {
+    pub event_type: String,
+    pub severity: String,
+    pub symbol: Option<String>,
+    pub order_id: Option<String>,
+    pub reason: String,
+    pub timestamp: String,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Pub/Sub REST message types
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -126,6 +202,33 @@ impl PubSubClient {
         attrs.insert("type".into(), "tick".into());
 
         self.publish_message(&self.config.ticks_topic, tick, attrs).await
+    }
+
+    /// Publish a fill to BigQuery (via the Pub/Sub → BigQuery subscription).
+    ///
+    /// The message JSON must match the `trades` BigQuery schema exactly.
+    /// Call from a `tokio::spawn` task — never on the order execution hot path.
+    pub async fn publish_fill_bq(&self, record: &FillBqRecord) -> Result<String, TradingError> {
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("symbol".into(), record.symbol.clone());
+        attrs.insert("side".into(), record.side.clone());
+        attrs.insert("trading_mode".into(), record.trading_mode.clone());
+        attrs.insert("type".into(), "fill".into());
+
+        self.publish_message(&self.config.fills_topic, record, attrs).await
+    }
+
+    /// Publish a risk event to the `quantai-risk-events` topic.
+    ///
+    /// HALT events are published here so the monitoring pipeline can alert.
+    /// Call from a `tokio::spawn` — never on the hot path.
+    pub async fn publish_risk_event(&self, record: &RiskEventBqRecord) -> Result<String, TradingError> {
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("severity".into(), record.severity.clone());
+        attrs.insert("event_type".into(), record.event_type.clone());
+        attrs.insert("type".into(), "risk_event".into());
+
+        self.publish_message(&self.config.risk_events_topic, record, attrs).await
     }
 
     /// Verify that credentials are available and the project is reachable.

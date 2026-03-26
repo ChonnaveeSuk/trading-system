@@ -69,25 +69,41 @@ resource "google_service_account" "quantai" {
 
 resource "google_secret_manager_secret" "trading_mode" {
   secret_id = "trading-mode"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   depends_on = [google_project_service.apis]
 }
 
 resource "google_secret_manager_secret" "ibkr_paper_port" {
   secret_id = "ibkr-paper-port"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   depends_on = [google_project_service.apis]
 }
 
 resource "google_secret_manager_secret" "postgres_password" {
   secret_id = "quantai-postgres-password"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
   depends_on = [google_project_service.apis]
 }
 
 resource "google_secret_manager_secret" "ibkr_account_id" {
   secret_id = "ibkr-account-id"
-  replication { auto {} }
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret" "ibkr_paper_host" {
+  secret_id = "ibkr-paper-host"
+  replication {
+    auto {}
+  }
   depends_on = [google_project_service.apis]
 }
 
@@ -98,6 +114,7 @@ resource "google_secret_manager_secret_iam_member" "sa_secret_access" {
     google_secret_manager_secret.ibkr_paper_port.id,
     google_secret_manager_secret.postgres_password.id,
     google_secret_manager_secret.ibkr_account_id.id,
+    google_secret_manager_secret.ibkr_paper_host.id,
   ])
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
@@ -209,7 +226,10 @@ resource "google_storage_bucket" "backups" {
   }
 
   lifecycle_rule {
-    action { type = "SetStorageClass"; storage_class = "NEARLINE" }
+    action {
+      type          = "SetStorageClass"
+      storage_class = "NEARLINE"
+    }
     condition { age = 30 } # Move to NEARLINE after 30 days (cost saving)
   }
 
@@ -241,4 +261,108 @@ resource "google_storage_bucket_iam_member" "sa_gcs_writer" {
   bucket = google_storage_bucket.backups.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.quantai.email}"
+}
+
+# ── Pub/Sub → BigQuery Subscriptions ─────────────────────────────────────────
+# Native Pub/Sub BigQuery subscriptions stream messages directly into BigQuery
+# tables without Dataflow or Cloud Functions. ADR-002: GCP always downstream.
+#
+# Message format: JSON matching the BigQuery table schema.
+# The Rust publisher sends fill.to_bq_json() which matches trades.json schema.
+
+# Grant the Pub/Sub service agent permission to write to BigQuery
+data "google_project" "project" {}
+
+resource "google_project_iam_member" "pubsub_bq_editor" {
+  project = var.project_id
+  role    = "roles/bigquery.dataEditor"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "pubsub_bq_viewer" {
+  project = var.project_id
+  role    = "roles/bigquery.metadataViewer"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+# Fills → BigQuery trades table (primary audit trail)
+resource "google_pubsub_subscription" "fills_to_bq" {
+  name  = "quantai-fills-to-bigquery"
+  topic = google_pubsub_topic.fills.name
+
+  bigquery_config {
+    table            = "${var.project_id}.${google_bigquery_dataset.quantai.dataset_id}.${google_bigquery_table.trades.table_id}"
+    use_table_schema = true   # Map JSON fields to BQ schema automatically
+    write_metadata   = false
+  }
+
+  # Dead-letter: route failed messages to DLQ topic after 5 attempts
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.dead_letter.id
+    max_delivery_attempts = 5
+  }
+
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "300s"
+  }
+
+  depends_on = [
+    google_project_iam_member.pubsub_bq_editor,
+    google_project_iam_member.pubsub_bq_viewer,
+    google_bigquery_table.trades,
+  ]
+}
+
+# ── Pub/Sub Subscriptions for pull-based consumers (strategy layer) ───────────
+
+# Signals subscription — Python strategy layer subscribes here to receive
+# processed signals for backtesting validation (Phase 2)
+resource "google_pubsub_subscription" "signals_pull" {
+  name  = "quantai-signals-strategy"
+  topic = google_pubsub_topic.signals.name
+
+  ack_deadline_seconds = 60
+
+  retry_policy {
+    minimum_backoff = "5s"
+    maximum_backoff = "60s"
+  }
+}
+
+# Risk events subscription — monitoring / alerting pipeline (Phase 3)
+resource "google_pubsub_subscription" "risk_events_pull" {
+  name  = "quantai-risk-events-monitor"
+  topic = google_pubsub_topic.risk_events.name
+
+  ack_deadline_seconds = 60
+
+  retry_policy {
+    minimum_backoff = "5s"
+    maximum_backoff = "60s"
+  }
+}
+
+# ── Monitoring: Alert on HALT risk events ────────────────────────────────────
+# Phase 3: wire this to PagerDuty / email. Placeholder notification channel.
+resource "google_monitoring_alert_policy" "halt_alert" {
+  display_name = "QuantAI Trading Halt"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "Risk halt event published"
+    condition_threshold {
+      filter          = "resource.type=\"pubsub_topic\" AND resource.labels.topic_id=\"quantai-risk-events\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_COUNT"
+      }
+    }
+  }
+
+  notification_channels = [] # Phase 3: add email/PagerDuty channel IDs here
+  depends_on            = [google_project_service.apis]
 }

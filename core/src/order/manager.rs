@@ -19,6 +19,7 @@ use std::{
     sync::Arc,
 };
 
+use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json;
@@ -30,6 +31,7 @@ use uuid::Uuid;
 use crate::{
     broker::Broker,
     error::{RiskError, TradingError},
+    gcp::pubsub::{FillBqRecord, PubSubClient, RiskEventBqRecord},
     risk::RiskEngine,
     types::{Fill, Order, OrderStatus, OrderType, Position, Side},
 };
@@ -44,6 +46,9 @@ use super::PortfolioSnapshot;
 ///
 /// Owns the order lifecycle from risk check through fill application.
 /// All state is protected by `RwLock`; use `.clone()` for concurrency.
+///
+/// GCP publishing is optional (set via `with_pubsub`). When set, fills and
+/// risk halt events are published fire-and-forget per ADR-002.
 #[derive(Clone)]
 pub struct OmsManager {
     pool: PgPool,
@@ -55,6 +60,9 @@ pub struct OmsManager {
     positions: Arc<RwLock<HashMap<String, Position>>>,
     /// Portfolio snapshot updated on every fill and used for risk checks.
     portfolio: Arc<RwLock<PortfolioSnapshot>>,
+    /// Optional GCP Pub/Sub client. None = GCP disabled (local-only mode).
+    /// Clone is cheap — PubSubClient is Arc-backed.
+    pubsub: Option<PubSubClient>,
 }
 
 impl OmsManager {
@@ -63,7 +71,8 @@ impl OmsManager {
     /// Create the OMS and load current state from PostgreSQL.
     ///
     /// Reads open orders and positions from the DB so a restart picks up
-    /// where trading left off.
+    /// where trading left off. GCP publishing is disabled by default —
+    /// call `.with_pubsub(client)` to enable.
     pub async fn new(
         pool: PgPool,
         broker: Arc<dyn Broker>,
@@ -84,10 +93,23 @@ impl OmsManager {
                 positions: HashMap::new(),
                 open_order_count: 0,
             })),
+            pubsub: None,
         };
 
         oms.reload_from_db().await?;
         Ok(oms)
+    }
+
+    /// Enable GCP Pub/Sub publishing.
+    ///
+    /// After fills are applied, a `FillBqRecord` is published fire-and-forget to
+    /// the fills topic (→ BigQuery via the Pub/Sub subscription).
+    /// Risk halt events are published to the risk-events topic.
+    ///
+    /// Per ADR-002: GCP failure NEVER halts trading.
+    pub fn with_pubsub(mut self, client: PubSubClient) -> Self {
+        self.pubsub = Some(client);
+        self
     }
 
     /// Load active orders and positions from DB on startup.
@@ -175,7 +197,8 @@ impl OmsManager {
                         reason   = %risk_err,
                         "OMS: risk check FAILED — order rejected"
                     );
-                    let details = serde_json::json!({ "reason": risk_err.to_string() });
+                    let reason = risk_err.to_string();
+                    let details = serde_json::json!({ "reason": &reason });
                     // Drop read locks before the await
                     drop(portfolio);
                     drop(positions);
@@ -187,6 +210,25 @@ impl OmsManager {
                         details,
                     )
                     .await;
+
+                    // Publish halt/warn events to GCP (fire-and-forget, ADR-002)
+                    if let Some(ref ps) = self.pubsub {
+                        let rec = RiskEventBqRecord {
+                            event_type: event_type.to_string(),
+                            severity: severity.to_string(),
+                            symbol: Some(order.symbol.clone()),
+                            order_id: Some(client_id.to_string()),
+                            reason,
+                            timestamp: Utc::now().to_rfc3339(),
+                        };
+                        let ps = ps.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ps.publish_risk_event(&rec).await {
+                                warn!("Pub/Sub risk event publish failed (non-fatal): {e}");
+                            }
+                        });
+                    }
+
                     return Err(TradingError::Risk(risk_err));
                 }
             }
@@ -310,6 +352,27 @@ impl OmsManager {
             portfolio.positions = positions.clone();
         }
 
+        // ── 5. GCP Pub/Sub fire-and-forget (ADR-002) ──────────────────────────
+        // Gather order metadata needed for the BigQuery record while we still
+        // hold the orders lock. Then spawn — never await on the hot path.
+        if let Some(ref ps) = self.pubsub {
+            let (strategy_id, signal_score) = {
+                let orders = self.orders.read().await;
+                let order = orders.get(&client_id);
+                (
+                    order.and_then(|o| o.strategy_id.clone()),
+                    order.and_then(|o| o.signal_score),
+                )
+            };
+            let record = FillBqRecord::from_fill(&fill, strategy_id, signal_score, "paper");
+            let ps = ps.clone();
+            tokio::spawn(async move {
+                if let Err(e) = ps.publish_fill_bq(&record).await {
+                    warn!("Pub/Sub fill publish failed (non-fatal): {e}");
+                }
+            });
+        }
+
         Ok(())
     }
 
@@ -362,6 +425,11 @@ impl OmsManager {
     /// Returns the current portfolio snapshot (cloned for thread safety).
     pub async fn portfolio_snapshot(&self) -> PortfolioSnapshot {
         self.portfolio.read().await.clone()
+    }
+
+    /// Returns true if GCP Pub/Sub is wired for this OMS instance.
+    pub fn has_pubsub(&self) -> bool {
+        self.pubsub.is_some()
     }
 
     // ── Database helpers ──────────────────────────────────────────────────────

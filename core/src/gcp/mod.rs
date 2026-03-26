@@ -25,6 +25,7 @@ pub struct GcpConfig {
     pub fills_topic: String,
     pub ticks_topic: String,
     pub signals_topic: String,
+    pub risk_events_topic: String,
     pub region: String, // default: asia-southeast1
 }
 
@@ -38,6 +39,7 @@ impl GcpConfig {
             fills_topic: format!("projects/{project_id}/topics/quantai-fills"),
             ticks_topic: format!("projects/{project_id}/topics/quantai-ticks"),
             signals_topic: format!("projects/{project_id}/topics/quantai-signals"),
+            risk_events_topic: format!("projects/{project_id}/topics/quantai-risk-events"),
             region: "asia-southeast1".into(),
             project_id,
         })
