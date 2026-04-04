@@ -1,0 +1,756 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "datasource", "id": "postgres", "name": "PostgreSQL", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Portfolio Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total Fills",
+      "description": "Total number of fills recorded in PostgreSQL",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Total Fills\" FROM fills",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } }
+      }
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Open Positions",
+      "description": "Number of symbols with non-zero quantity",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"Open Positions\" FROM positions WHERE quantity <> 0",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } }
+      }
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Win Rate",
+      "description": "% of SELL fills that were profitable (pnl > 0)",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE gross_value > (SELECT AVG(gross_value) FROM fills f2 WHERE f2.client_order_id = fills.client_order_id AND f2.side='BUY')) / NULLIF(COUNT(*) FILTER (WHERE side='SELL'), 0), 1) AS \"Win Rate %\" FROM fills WHERE side = 'SELL'",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 40 },
+              { "color": "green", "value": 55 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Realized P&L",
+      "description": "Sum of all sell proceeds minus buy costs",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT ROUND(SUM(CASE WHEN side='SELL' THEN (filled_quantity * fill_price - commission) ELSE -(filled_quantity * fill_price + commission) END)::numeric, 2) AS \"Realized P&L\" FROM fills",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "OHLCV Bars",
+      "description": "Total historical bars stored per symbol",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS \"OHLCV Bars\" FROM ohlcv",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "purple", "value": null }] } }
+      }
+    },
+
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Trading Mode",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT 'PAPER' AS \"Mode\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } }
+      }
+    },
+
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Equity & P&L",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Cumulative P&L (Realized)",
+      "description": "Running sum of trade proceeds minus costs, from fills table. Does not include unrealized open position value.",
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 6 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS time, SUM(CASE WHEN side='SELL' THEN (filled_quantity * fill_price - commission) ELSE -(filled_quantity * fill_price + commission) END) OVER (ORDER BY timestamp) AS \"Cumulative P&L\" FROM fills ORDER BY timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 2, "fillOpacity": 15 },
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Daily Trade Count",
+      "description": "Number of fills per calendar day",
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 6 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT date_trunc('day', timestamp) AS time, COUNT(*) AS \"Fills\" FROM fills GROUP BY 1 ORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 80 },
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      }
+    },
+
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Price History",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+      "collapsed": false
+    },
+
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "AAPL — Daily Close",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS time, close::float8 AS \"AAPL Close\" FROM ohlcv WHERE symbol = 'AAPL' ORDER BY timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 2 },
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      }
+    },
+
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "BTC-USD — Daily Close",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS time, close::float8 AS \"BTC-USD Close\" FROM ohlcv WHERE symbol = 'BTC-USD' ORDER BY timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 2 },
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        }
+      }
+    },
+
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "EUR-USD — Daily Close",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS time, close::float8 AS \"EUR-USD Close\" FROM ohlcv WHERE symbol = 'EUR-USD' ORDER BY timestamp",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5,
+          "custom": { "lineWidth": 2 },
+          "color": { "mode": "fixed", "fixedColor": "purple" }
+        }
+      }
+    },
+
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Trades & Positions",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "collapsed": false
+    },
+
+    {
+      "id": 31,
+      "type": "table",
+      "title": "Recent Fills (last 20)",
+      "description": "Most recent fills from the paper trading engine",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 25 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp::timestamptz AS \"Time\", symbol AS \"Symbol\", side AS \"Side\", filled_quantity::float8 AS \"Quantity\", fill_price::float8 AS \"Fill Price\", commission::float8 AS \"Commission\", gross_value::float8 AS \"Gross Value\", strategy_id AS \"Strategy\" FROM fills ORDER BY timestamp DESC LIMIT 20",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "sortBy": [{ "displayName": "Time", "desc": true }],
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Fill Price" }, "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 }] },
+          { "matcher": { "id": "byName", "options": "Commission" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] },
+          { "matcher": { "id": "byName", "options": "Gross Value" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] },
+          { "matcher": { "id": "byName", "options": "Side" }, "properties": [
+            { "id": "custom.displayMode", "value": "color-background" },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "BUY":  { "text": "BUY",  "color": "green", "index": 0 } } },
+              { "type": "value", "options": { "SELL": { "text": "SELL", "color": "red",   "index": 1 } } }
+            ]}
+          ]}
+        ]
+      }
+    },
+
+    {
+      "id": 32,
+      "type": "table",
+      "title": "Current Positions",
+      "description": "All open positions (quantity ≠ 0) from OmsManager",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 25 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT symbol AS \"Symbol\", quantity::float8 AS \"Quantity\", average_cost::float8 AS \"Avg Cost\", realized_pnl::float8 AS \"Realized P&L\", updated_at AS \"Updated\" FROM positions WHERE quantity <> 0 ORDER BY symbol",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Avg Cost" }, "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 }] },
+          { "matcher": { "id": "byName", "options": "Realized P&L" }, "properties": [
+            { "id": "unit", "value": "currencyUSD" },
+            { "id": "custom.displayMode", "value": "color-text" },
+            { "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] } }
+          ]}
+        ]
+      }
+    },
+
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Strategy & Risk",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "collapsed": false
+    },
+
+    {
+      "id": 41,
+      "type": "table",
+      "title": "Risk Events",
+      "description": "All risk engine rejections and halts",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 36 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT timestamp AS \"Time\", event_type AS \"Event\", severity AS \"Severity\", symbol AS \"Symbol\", reason AS \"Reason\" FROM risk_events ORDER BY timestamp DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Severity" }, "properties": [
+            { "id": "custom.displayMode", "value": "color-background" },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "HALT":   { "color": "red",    "index": 0 } } },
+              { "type": "value", "options": { "WARN":   { "color": "yellow", "index": 1 } } },
+              { "type": "value", "options": { "REJECT": { "color": "orange", "index": 2 } } }
+            ]}
+          ]}
+        ]
+      }
+    },
+
+    {
+      "id": 42,
+      "type": "table",
+      "title": "Signals Log",
+      "description": "Strategy signals logged to the signals table",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 36 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT created_at AS \"Time\", strategy_id AS \"Strategy\", symbol AS \"Symbol\", direction AS \"Direction\", score::float8 AS \"Score\", stop_loss::float8 AS \"Stop Loss\", quantity::float8 AS \"Quantity\" FROM signals ORDER BY created_at DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Score" }, "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 2 }] },
+          { "matcher": { "id": "byName", "options": "Direction" }, "properties": [
+            { "id": "custom.displayMode", "value": "color-background" },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "BUY":  { "color": "green", "index": 0 } } },
+              { "type": "value", "options": { "SELL": { "color": "red",   "index": 1 } } },
+              { "type": "value", "options": { "HOLD": { "color": "blue",  "index": 2 } } }
+            ]}
+          ]}
+        ]
+      }
+    },
+
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Live Paper Gate — 90-Day Tracking",
+      "description": "Gate: Sharpe > 1.0 AND MaxDD < 15% over 90 days. All four metrics must pass before Phase 4.",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "collapsed": false
+    },
+
+    {
+      "id": 55,
+      "type": "stat",
+      "title": "Unrealized P&L",
+      "description": "Mark-to-market value of all open positions vs average cost",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE(SUM(unrealized_pnl), 0)::float8 AS \"Unrealized P&L\" FROM positions",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] }
+        }
+      }
+    },
+
+    {
+      "id": 56,
+      "type": "stat",
+      "title": "Total P&L (Realized + Unrealized)",
+      "description": "All fills P&L plus current open-position mark-to-market",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT (COALESCE((SELECT SUM(CASE WHEN side='SELL' THEN (filled_quantity * fill_price - commission) ELSE -(filled_quantity * fill_price + commission) END) FROM fills), 0) + COALESCE((SELECT SUM(unrealized_pnl) FROM positions), 0))::float8 AS \"Total P&L\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] }
+        }
+      }
+    },
+
+    {
+      "id": 57,
+      "type": "stat",
+      "title": "90-Day Max Drawdown",
+      "description": "Max peak-to-trough drawdown over last 90 days. Gate: must stay below 15%.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH vals AS (SELECT COALESCE(ending_value, starting_value) AS v FROM daily_pnl WHERE trading_date >= CURRENT_DATE - 90 ORDER BY trading_date), running AS (SELECT v, MAX(v) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak FROM vals) SELECT ROUND(ABS(MIN((v - peak) / NULLIF(peak, 0) * 100.0))::numeric, 2)::float8 AS \"Max DD %\" FROM running",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 8 },
+              { "color": "red", "value": 15 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 58,
+      "type": "stat",
+      "title": "Days in Paper Run",
+      "description": "Total days with recorded daily_pnl. Phase 4 gate requires 90 days.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 44 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*)::int AS \"Days\" FROM daily_pnl",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "green", "value": 90 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Portfolio Equity Curve",
+      "description": "Daily ending portfolio value from daily_pnl. Starts at $100,000. Updated each day by the running system.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 48 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT trading_date AS time, COALESCE(ending_value, starting_value)::float8 AS \"Portfolio Value\" FROM daily_pnl ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": { "mode": "fixed", "fixedColor": "green" }
+        }
+      }
+    },
+
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Drawdown from Peak",
+      "description": "Daily % drawdown from the highest portfolio value reached. Gate: must stay above −15% (red threshold).",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 48 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH vals AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v FROM daily_pnl), peaks AS (SELECT trading_date, v, MAX(v) OVER (ORDER BY trading_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak FROM vals) SELECT trading_date AS time, ROUND(100.0 * (v - peak) / NULLIF(peak, 0), 2)::float8 AS \"Drawdown %\" FROM peaks ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": -8 },
+              { "color": "red", "value": -15 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 53,
+      "type": "timeseries",
+      "title": "Daily P&L",
+      "description": "Total P&L (realized + unrealized) per trading day. Green bars = profitable day.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 57 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT trading_date AS time, total_pnl::float8 AS \"Daily P&L\" FROM daily_pnl ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 80 },
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 54,
+      "type": "timeseries",
+      "title": "Rolling 30-Day Sharpe Ratio",
+      "description": "Annualised Sharpe over a 30-day rolling window of daily portfolio returns. Gate: must be > 1.0 (green line).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 57 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH port AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v FROM daily_pnl ORDER BY trading_date), rets AS (SELECT trading_date, (v - LAG(v) OVER (ORDER BY trading_date)) / NULLIF(LAG(v) OVER (ORDER BY trading_date), 0) AS r FROM port) SELECT trading_date AS time, ROUND((SQRT(252) * AVG(r) OVER (ORDER BY trading_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) / NULLIF(STDDEV(r) OVER (ORDER BY trading_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW), 0))::numeric, 2)::float8 AS \"Sharpe (30d)\" FROM rets WHERE r IS NOT NULL ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": { "lineWidth": 2 },
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.5 },
+              { "color": "green", "value": 1.0 }
+            ]
+          }
+        }
+      }
+    }
+
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["quantai", "paper-trading", "phase4-prep"],
+  "time": { "from": "now-90d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "QuantAI Paper Trading",
+  "uid": "quantai-trading-v1",
+  "version": 2
+}

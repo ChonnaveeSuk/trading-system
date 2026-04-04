@@ -1,0 +1,26 @@
+# trading-system/infra/grafana/provisioning/datasources/postgres.yaml
+#
+# Auto-provisions the PostgreSQL datasource in Grafana.
+# The host must use the Docker service name (not localhost) since Grafana
+# runs inside the quantai-grafana container on the same Docker network.
+
+apiVersion: 1
+
+datasources:
+  - name: QuantAI PostgreSQL
+    type: postgres
+    uid: quantai_pg
+    url: quantai-postgres:5432
+    user: quantai
+    secureJsonData:
+      password: quantai_dev_2026
+    jsonData:
+      database:         quantai
+      sslmode:          disable
+      maxOpenConns:     5
+      maxIdleConns:     2
+      connMaxLifetime:  14400
+      postgresVersion:  1600
+      timescaledb:      false
+    isDefault: true
+    editable: false

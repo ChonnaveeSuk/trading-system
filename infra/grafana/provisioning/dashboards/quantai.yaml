@@ -1,0 +1,16 @@
+# trading-system/infra/grafana/provisioning/dashboards/quantai.yaml
+#
+# Tells Grafana where to find dashboard JSON files.
+
+apiVersion: 1
+
+providers:
+  - name: QuantAI Dashboards
+    orgId: 1
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
