@@ -3,10 +3,11 @@
 # Dual Moving Average crossover + RSI mean-reversion strategy.
 #
 # Signal sources (any can generate a trade; highest-priority fires):
-#   1. RSI mean-reversion: RSI(RSI_PERIOD) enters oversold/overbought zone
-#      - RSI < rsi_oversold (35) → BUY  (buy the dip, requires MA uptrend)
-#      - RSI > rsi_overbought (65) → SELL  (take profit)
+#   1. RSI mean-reversion: RSI(rsi_period) enters oversold/overbought zone
+#      - RSI < rsi_oversold → BUY  (buy the dip; standalone, no MA required)
+#      - RSI > rsi_overbought → SELL  (take profit; standalone)
 #      - No volume requirement; disabled for FX (sparse volume)
+#      - Long-term trend filter (trend_period) applies if configured
 #   2. Bollinger Band mean-reversion: price touches 2σ band
 #      - price < BB_lower → BUY (oversold, requires MA uptrend + volume)
 #      - price > BB_upper → SELL (overbought, requires volume)
@@ -21,8 +22,14 @@
 #     - RSI extremity (distance from rsi_oversold/overbought): up to +0.30
 #     - MA spread magnitude (normalised by price): up to +0.15
 #
-# Parameters: 8 (fast_period, slow_period, vol_period, noise_filter_bps,
-#               rsi_oversold, rsi_overbought, bb_period, bb_std_dev)
+# Position sizing (ATR-based, when atr_period > 0):
+#   qty = (portfolio * atr_risk_pct) / ATR(atr_period)
+#   Capped at 5% of portfolio (matching risk engine hard limit).
+#   Stop loss placed at entry ± 1× ATR instead of slow MA ± 1%.
+#
+# Parameters: 10 (fast_period, slow_period, vol_period, noise_filter_bps,
+#                rsi_oversold, rsi_overbought, rsi_period, bb_period,
+#                bb_std_dev, trend_period, atr_period, atr_risk_pct)
 #
 # WARNING: 30 days of data is INSUFFICIENT for production use.
 # The design requires min 252 trading days lookback. This implementation
@@ -46,8 +53,9 @@ STRATEGY_ID = "momentum_v1"
 MIN_REQUIRED_BARS = 30   # Absolute minimum to compute slow MA
 PRODUCTION_MIN_BARS = 252  # Per design — flag if below this
 
-# RSI period — fixed (Wilder's standard 7-period for daily charts)
-RSI_PERIOD = 7
+# Default RSI period — 7-period (fast, tuned in Phase 3 simulation).
+# Override via MomentumConfig.rsi_period for RSI(14) mean-reversion layer.
+_DEFAULT_RSI_PERIOD = 7
 
 
 def _compute_rsi(close: pd.Series, period: int) -> pd.Series:
@@ -71,9 +79,16 @@ class MomentumConfig:
     noise_filter_bps: float = 5.0   # Ignore crossovers where spread < 5bps
     rsi_oversold: float = 30.0      # RSI buy threshold (oversold)
     rsi_overbought: float = 70.0    # RSI sell threshold (overbought)
+    rsi_period: int = _DEFAULT_RSI_PERIOD  # RSI lookback (7 = fast/Phase3, 14 = Wilder standard)
     bb_period: int = 0              # Bollinger Band period (0 = disabled; BB SELL removed as it cuts trend profits)
     bb_std_dev: float = 2.0         # Bollinger Band std dev multiplier
     trend_period: int = 0           # Long-term trend filter period (0 = disabled)
+
+    # ATR-based position sizing & stop loss (0 = disabled, use fixed position_pct)
+    # When enabled: qty = (portfolio * atr_risk_pct) / ATR(atr_period), capped at 5%.
+    # Stop loss placed at entry ± 1× ATR instead of slow_ma ± 1%.
+    atr_period: int = 14
+    atr_risk_pct: float = 0.01      # fraction of portfolio risked per ATR unit
 
 
 @dataclass
@@ -167,13 +182,16 @@ class MomentumStrategy:
                 features={"reason": "nan_in_indicators"},
             )
 
-        # ── RSI (mean-reversion signal source) ───────────────────────────────
-        rsi_series = _compute_rsi(close, RSI_PERIOD)
+        # ── RSI mean-reversion layer ──────────────────────────────────────────
+        # Uses rsi_period from config (default 7 for speed, 14 for Wilder standard).
+        # RSI BUY is a standalone mean-reversion signal: no MA uptrend required.
+        # Only the long-term trend filter (if trend_period > 0) gates BUY direction.
+        rsi_series = _compute_rsi(close, self.config.rsi_period)
         _rsi_raw = float(rsi_series.iloc[-1])
         if np.isnan(_rsi_raw):
             logger.debug(
                 "%s: RSI NaN (insufficient history for period=%d) — using neutral 50.0",
-                symbol, RSI_PERIOD,
+                symbol, self.config.rsi_period,
             )
             curr_rsi = 50.0
         else:
@@ -262,8 +280,9 @@ class MomentumStrategy:
             ma_direction = Direction.HOLD
 
         # Combined direction: RSI → BB → MA crossover (priority order)
-        # All BUY signals require uptrend confirmation.
-        if rsi_buy and curr_fast > curr_slow and in_uptrend:
+        # RSI BUY is a standalone mean-reversion signal (no MA uptrend required).
+        # Long-term trend filter (in_uptrend) still gates all BUY signals.
+        if rsi_buy and in_uptrend:
             direction = Direction.BUY
         elif rsi_sell:
             direction = Direction.SELL  # take profit regardless of trend
@@ -288,34 +307,66 @@ class MomentumStrategy:
                 rsi_component = max(min((curr_rsi - self.config.rsi_overbought) / (100.0 - self.config.rsi_overbought), 1.0), 0.0) * 0.30
             score = round(min(base + spread_component + rsi_component, 1.0), 4)
 
+        # ── ATR computation ───────────────────────────────────────────────────
+        # ATR(atr_period) used for adaptive position sizing and stop placement.
+        # Falls back to fixed position_pct sizing when atr_period=0 or ATR is NaN.
+        atr_val: Optional[float] = None
+        if self.config.atr_period > 0 and len(df) >= self.config.atr_period + 1:
+            high = df["high"].astype(float)
+            low  = df["low"].astype(float)
+            prev_close = close.shift(1)
+            tr = pd.concat([
+                high - low,
+                (high - prev_close).abs(),
+                (low  - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            _atr_raw = float(tr.rolling(self.config.atr_period).mean().iloc[-1])
+            if not np.isnan(_atr_raw) and _atr_raw > 0:
+                atr_val = _atr_raw
+
         # ── Position sizing ───────────────────────────────────────────────────
-        # Allocate position_pct of portfolio, rounded to instrument precision
-        notional = portfolio_value * position_pct
+        # ATR-based: risk atr_risk_pct of portfolio per ATR unit.
+        #   qty = (portfolio * atr_risk_pct) / ATR
+        #   Capped at 5% of portfolio (mirrors Rust risk engine hard limit).
+        # Fallback: fixed position_pct of portfolio when ATR unavailable.
         if curr_price > 0 and direction != Direction.HOLD:
-            raw_qty = notional / curr_price
+            if atr_val is not None:
+                risk_dollars = portfolio_value * self.config.atr_risk_pct
+                raw_qty = risk_dollars / atr_val
+                max_qty = (portfolio_value * 0.05) / curr_price   # 5% cap
+                raw_qty = min(raw_qty, max_qty)
+            else:
+                raw_qty = (portfolio_value * position_pct) / curr_price
+
             # Instrument-appropriate rounding
             if symbol.endswith("-USD") and curr_price > 1000:
-                # Crypto: 4 decimal places
-                quantity = Decimal(str(round(raw_qty, 4)))
+                quantity = Decimal(str(round(raw_qty, 4)))  # Crypto: 4dp
             elif curr_price < 10:
-                # FX / cheap instruments: whole units
-                quantity = Decimal(str(round(raw_qty, 0)))
+                quantity = Decimal(str(round(raw_qty, 0)))  # FX/cheap: whole units
             else:
-                # Equities: whole shares
-                quantity = Decimal(str(int(raw_qty)))
+                quantity = Decimal(str(int(raw_qty)))       # Equities: whole shares
         else:
             quantity = None
 
         # ── Stop loss ─────────────────────────────────────────────────────────
-        # BUY: stop at slow MA (structure support)
-        # SELL: stop at slow MA (structure resistance)
+        # ATR-based: entry ± 1× ATR (adaptive to recent volatility).
+        # Fallback: slow MA ± 1% (structure support/resistance).
+        # Safety: stop MUST be below entry for BUY and above for SELL.
+        # This matters when RSI BUY fires with price < slow_ma (standalone
+        # mean-reversion entry): slow_ma * 0.99 would be ABOVE the entry price.
         if direction == Direction.BUY:
-            # 1% buffer below slow MA as stop
-            stop_price = curr_slow * 0.99
+            if atr_val is not None:
+                stop_price = curr_price - atr_val
+            else:
+                # Cap at 1% below entry when slow MA is above current price
+                stop_price = min(curr_slow * 0.99, curr_price * 0.99)
             stop_loss = Decimal(str(round(stop_price, 5)))
         elif direction == Direction.SELL:
-            # 1% buffer above slow MA as stop
-            stop_price = curr_slow * 1.01
+            if atr_val is not None:
+                stop_price = curr_price + atr_val
+            else:
+                # Floor at 1% above entry when slow MA is below current price
+                stop_price = max(curr_slow * 1.01, curr_price * 1.01)
             stop_loss = Decimal(str(round(stop_price, 5)))
         else:
             stop_loss = None
@@ -340,7 +391,9 @@ class MomentumStrategy:
             "prev_fast_ma": round(float(prev_fast), 4),
             "prev_slow_ma": round(float(prev_slow), 4),
             "rsi": round(curr_rsi, 2),
-            "rsi_period": RSI_PERIOD,
+            "rsi_period": self.config.rsi_period,
+            "atr": round(atr_val, 5) if atr_val is not None else None,
+            "atr_period": self.config.atr_period,
             "bb_upper": round(bb_upper_val, 5) if bb_valid else None,
             "bb_lower": round(bb_lower_val, 5) if bb_valid else None,
             "bars_available": bars_available,
@@ -392,8 +445,8 @@ class MomentumStrategy:
         signals["ma_spread_bps"] = (fast_ma - slow_ma) / slow_ma * 10_000
         signals["vol_ratio"] = volume / vol_avg
 
-        # RSI mean-reversion signal source
-        rsi = _compute_rsi(close, RSI_PERIOD)
+        # RSI mean-reversion layer (standalone — no MA uptrend required for BUY)
+        rsi = _compute_rsi(close, self.config.rsi_period)
         signals["rsi"] = rsi
         rsi_buy = rsi < self.config.rsi_oversold    # oversold → buy the dip
         rsi_sell = rsi > self.config.rsi_overbought  # overbought → take profit
@@ -455,9 +508,10 @@ class MomentumStrategy:
             # BB BUY: price below lower band + uptrend + volume + long-term trend
             bb_buy = (close < bb_lower) & bb_valid_s & vol_confirmed & (fast_ma > slow_ma) & in_uptrend
 
-        # RSI BUY requires uptrend confirmation + long-term trend filter.
-        # RSI SELL fires regardless (take profit / exit).
-        rsi_buy_filtered = rsi_buy & (fast_ma > slow_ma) & in_uptrend
+        # RSI BUY is a standalone mean-reversion signal: MA uptrend NOT required.
+        # Only the long-term trend filter (in_uptrend) gates BUY direction.
+        # RSI SELL fires regardless of trend (take profit / exit).
+        rsi_buy_filtered = rsi_buy & in_uptrend
 
         # Combined direction: RSI → BB → MA crossover (priority order, last wins)
         signals["direction"] = Direction.HOLD.value
