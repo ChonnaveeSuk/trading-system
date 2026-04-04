@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use quantai_core::{
+    bridge,
     broker::paper::{PaperBroker, PaperConfig},
     gcp::{pubsub::PubSubClient, GcpConfig},
     market_data::feed::{FeedConfig, RedisFeed},
@@ -113,7 +114,23 @@ async fn main() -> Result<()> {
         }
     };
 
-    // ── 8. Fill consumer task ─────────────────────────────────────────────────
+    // ── 8. gRPC bridge server ─────────────────────────────────────────────────
+    // Listens on localhost:50051 for Python strategy signals.
+    // Runs in its own task — gRPC errors do NOT crash the engine.
+    let grpc_addr: std::net::SocketAddr = std::env::var("GRPC_ADDR")
+        .unwrap_or_else(|_| "[::1]:50051".into())
+        .parse()
+        .context("Invalid GRPC_ADDR")?;
+
+    let oms_for_grpc = oms.clone();
+    tokio::spawn(async move {
+        if let Err(e) = bridge::serve(oms_for_grpc, grpc_addr).await {
+            error!("gRPC bridge exited: {e}");
+        }
+    });
+    info!(addr = %grpc_addr, "gRPC bridge spawned — Python signals accepted");
+
+    // ── 9. Fill consumer task ─────────────────────────────────────────────────
     // Drains fill_rx and forwards to OMS (which fire-and-forgets to GCP).
     // Must be spawned AFTER GCP is wired so the OMS clone carries pubsub.
     let oms_for_fills = oms.clone();
@@ -128,7 +145,7 @@ async fn main() -> Result<()> {
         warn!("Fill consumer task exited — broker channel closed");
     });
 
-    // ── 9. Ready ──────────────────────────────────────────────────────────────
+    // ── 10. Ready ─────────────────────────────────────────────────────────────
     info!(
         pubsub_active = oms.has_pubsub(),
         "QuantAI engine ready — paper trading active. Awaiting signals (Phase 2)."

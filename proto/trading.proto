@@ -1,0 +1,58 @@
+// trading-system/proto/trading.proto
+//
+// gRPC contract between the Python strategy layer and the Rust execution engine.
+//
+// Data flow:
+//   Python strategy → SignalRequest → Rust bridge → risk engine → OMS → broker
+//
+// Rules:
+//   - All financial values (prices, quantities) are strings to preserve Decimal precision.
+//   - HOLD signals must NOT be sent — Python filters them before calling gRPC.
+//   - Every request goes through the Rust risk engine; gRPC bridge NEVER bypasses it.
+//
+// Generate Rust:   cargo build (tonic-build in build.rs)
+// Generate Python: python -m grpc_tools.protoc ... (see scripts/gen_proto.sh)
+
+syntax = "proto3";
+package trading;
+
+// ── Trading Bridge ────────────────────────────────────────────────────────────
+
+service TradingBridge {
+  // Submit a trading signal. The Rust engine validates, risk-checks, and executes.
+  rpc SubmitSignal(SignalRequest) returns (SignalResponse);
+
+  // Health check — returns current engine state for monitoring.
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+// ── Signal submission ─────────────────────────────────────────────────────────
+
+message SignalRequest {
+  string strategy_id   = 1;  // e.g. "momentum_v1"
+  string symbol        = 2;  // e.g. "AAPL"
+  string direction     = 3;  // "BUY" or "SELL" — never "HOLD"
+  double score         = 4;  // [0.0, 1.0] — must be >= 0.55 for risk engine
+  string stop_loss     = 5;  // Decimal string, e.g. "170.50"
+  string quantity      = 6;  // Decimal string, e.g. "10"
+  string current_price = 7;  // Latest market price — used for risk checks
+}
+
+message SignalResponse {
+  bool   accepted  = 1;  // true if order was submitted to broker
+  string order_id  = 2;  // UUID string if accepted; empty if rejected
+  string status    = 3;  // "SUBMITTED", "REJECTED", "ERROR"
+  string message   = 4;  // Human-readable: rejection reason or broker order ID
+}
+
+// ── Health check ──────────────────────────────────────────────────────────────
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool   healthy          = 1;
+  bool   paper_mode       = 2;
+  string portfolio_value  = 3;  // Decimal string
+  int32  open_orders      = 4;
+  bool   pubsub_active    = 5;
+}

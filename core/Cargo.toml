@@ -46,11 +46,14 @@ sqlx = { version = "0.8", features = [
 redis = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
 
 # gRPC bridge
-tonic = "0.12"
+tonic = { version = "0.12", features = ["transport"] }
 prost = "0.13"
 
 # HTTP client (GCP Pub/Sub REST + health checks)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"

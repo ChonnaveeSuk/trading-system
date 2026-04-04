@@ -367,6 +367,11 @@ impl Broker for PaperBroker {
         // Paper broker is always healthy — no external dependencies.
         Ok(())
     }
+
+    /// Update the price cache via the Broker trait (delegates to on_price_update).
+    async fn on_price_update(&self, symbol: &str, price: rust_decimal::Decimal) {
+        PaperBroker::on_price_update(self, symbol, price).await;
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
