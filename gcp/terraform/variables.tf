@@ -3,6 +3,7 @@
 variable "project_id" {
   description = "GCP project ID"
   type        = string
+  default     = "quantai-trading-paper"
 }
 
 variable "region" {

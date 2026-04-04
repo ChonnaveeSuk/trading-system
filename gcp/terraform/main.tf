@@ -109,13 +109,13 @@ resource "google_secret_manager_secret" "ibkr_paper_host" {
 
 # Grant service account access to read secrets
 resource "google_secret_manager_secret_iam_member" "sa_secret_access" {
-  for_each = toset([
-    google_secret_manager_secret.trading_mode.id,
-    google_secret_manager_secret.ibkr_paper_port.id,
-    google_secret_manager_secret.postgres_password.id,
-    google_secret_manager_secret.ibkr_account_id.id,
-    google_secret_manager_secret.ibkr_paper_host.id,
-  ])
+  for_each = {
+    trading_mode      = google_secret_manager_secret.trading_mode.secret_id
+    ibkr_paper_port   = google_secret_manager_secret.ibkr_paper_port.secret_id
+    postgres_password = google_secret_manager_secret.postgres_password.secret_id
+    ibkr_account_id   = google_secret_manager_secret.ibkr_account_id.secret_id
+    ibkr_paper_host   = google_secret_manager_secret.ibkr_paper_host.secret_id
+  }
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.quantai.email}"
@@ -246,12 +246,12 @@ resource "google_bigquery_dataset_iam_member" "sa_bq_editor" {
 }
 
 resource "google_pubsub_topic_iam_member" "sa_pubsub_publisher" {
-  for_each = toset([
-    google_pubsub_topic.fills.id,
-    google_pubsub_topic.ticks.id,
-    google_pubsub_topic.signals.id,
-    google_pubsub_topic.risk_events.id,
-  ])
+  for_each = {
+    fills       = google_pubsub_topic.fills.name
+    ticks       = google_pubsub_topic.ticks.name
+    signals     = google_pubsub_topic.signals.name
+    risk_events = google_pubsub_topic.risk_events.name
+  }
   topic  = each.value
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${google_service_account.quantai.email}"
@@ -352,13 +352,13 @@ resource "google_monitoring_alert_policy" "halt_alert" {
   conditions {
     display_name = "Risk halt event published"
     condition_threshold {
-      filter          = "resource.type=\"pubsub_topic\" AND resource.labels.topic_id=\"quantai-risk-events\""
+      filter          = "metric.type=\"pubsub.googleapis.com/topic/send_message_operation_count\" AND resource.type=\"pubsub_topic\" AND resource.labels.topic_id=\"quantai-risk-events\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
       aggregations {
         alignment_period   = "60s"
-        per_series_aligner = "ALIGN_COUNT"
+        per_series_aligner = "ALIGN_RATE"
       }
     }
   }

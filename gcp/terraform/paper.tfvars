@@ -1,6 +1,6 @@
-project_id          = "quantai-trading"
+project_id          = "quantai-trading-paper"
 environment         = "paper"
 region              = "asia-southeast1"
 bigquery_dataset_id = "quantai_trading"
-gcs_backup_bucket   = "quantai-backups-quantai-trading"
+gcs_backup_bucket   = "quantai-backups-quantai-trading-paper"
 alert_email         = "chonnaveesukyao@gmail.com"
