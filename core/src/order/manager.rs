@@ -56,6 +56,8 @@ pub struct OmsManager {
     risk: Arc<RiskEngine>,
     /// In-flight and recently settled orders, keyed by client_order_id.
     orders: Arc<RwLock<HashMap<Uuid, Order>>>,
+    /// Maps client_order_id → broker-assigned order ID so cancel() can call broker.cancel_order().
+    broker_order_ids: Arc<RwLock<HashMap<Uuid, String>>>,
     /// Current open positions, keyed by symbol.
     positions: Arc<RwLock<HashMap<String, Position>>>,
     /// Portfolio snapshot updated on every fill and used for risk checks.
@@ -85,6 +87,7 @@ impl OmsManager {
             broker,
             risk,
             orders: Arc::new(RwLock::new(HashMap::new())),
+            broker_order_ids: Arc::new(RwLock::new(HashMap::new())),
             positions: Arc::new(RwLock::new(HashMap::new())),
             portfolio: Arc::new(RwLock::new(PortfolioSnapshot {
                 total_value: starting_portfolio_value,
@@ -146,7 +149,10 @@ impl OmsManager {
         )
         .fetch_one(&self.pool)
         .await
-        .unwrap_or(Some(0))
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "OMS: open order count query failed — defaulting to 0");
+            Some(0)
+        })
         .unwrap_or(0);
 
         let mut portfolio = self.portfolio.write().await;
@@ -272,6 +278,11 @@ impl OmsManager {
                 o.status = OrderStatus::Submitted;
             }
         }
+        // Store broker_order_id so cancel() can route the cancellation to the broker.
+        {
+            let mut ids = self.broker_order_ids.write().await;
+            ids.insert(client_id, broker_id.clone());
+        }
 
         info!(
             client_order_id = %client_id,
@@ -309,12 +320,17 @@ impl OmsManager {
         self.db_insert_fill(&fill).await?;
 
         // ── 2. Update order status to FILLED ──────────────────────────────────
-        self.db_update_order_status(client_id, OrderStatus::Filled, None).await?;
+        self.db_update_order_status(client_id, OrderStatus::Filled, fill.broker_order_id.as_deref()).await?;
         {
             let mut orders = self.orders.write().await;
             if let Some(o) = orders.get_mut(&client_id) {
                 o.status = OrderStatus::Filled;
             }
+        }
+        // Order is filled — remove from broker_order_ids (no longer cancellable).
+        {
+            let mut ids = self.broker_order_ids.write().await;
+            ids.remove(&client_id);
         }
 
         // ── 3. Upsert position ────────────────────────────────────────────────
@@ -379,10 +395,35 @@ impl OmsManager {
     // ── Cancel ────────────────────────────────────────────────────────────────
 
     /// Cancel a submitted order.
+    ///
+    /// Looks up the broker-assigned order ID from the in-memory map populated
+    /// at submit time, then forwards the cancellation to the broker before
+    /// updating the DB. Broker errors are logged but do not abort the DB update
+    /// (the order is marked cancelled in our system regardless — the broker may
+    /// have already filled or rejected it).
     pub async fn cancel(&self, client_order_id: Uuid) -> Result<(), TradingError> {
-        // TODO Phase 1.5: store broker_order_id on Order struct and call broker.cancel_order()
-        // For now, only the DB record is updated; PaperBroker cancel is handled via broker_id
-        // which will be wired up when Order carries its broker_id.
+        // Look up broker_order_id stored at submit time.
+        let broker_id = {
+            let ids = self.broker_order_ids.read().await;
+            ids.get(&client_order_id).cloned()
+        };
+
+        if let Some(ref bid) = broker_id {
+            if let Err(e) = self.broker.cancel_order(bid).await {
+                warn!(
+                    client_order_id = %client_order_id,
+                    broker_order_id = %bid,
+                    error = %e,
+                    "OMS: broker cancel failed — marking cancelled in DB anyway"
+                );
+            }
+        } else {
+            warn!(
+                client_order_id = %client_order_id,
+                "OMS: no broker_order_id found — order may have been submitted before this session"
+            );
+        }
+
         self.db_update_order_status(client_order_id, OrderStatus::Cancelled, None).await?;
         {
             let mut orders = self.orders.write().await;
@@ -393,6 +434,10 @@ impl OmsManager {
         {
             let mut portfolio = self.portfolio.write().await;
             portfolio.open_order_count = portfolio.open_order_count.saturating_sub(1);
+        }
+        {
+            let mut ids = self.broker_order_ids.write().await;
+            ids.remove(&client_order_id);
         }
 
         info!(client_order_id = %client_order_id, "OMS: order cancelled");
@@ -430,6 +475,15 @@ impl OmsManager {
     /// Returns true if GCP Pub/Sub is wired for this OMS instance.
     pub fn has_pubsub(&self) -> bool {
         self.pubsub.is_some()
+    }
+
+    /// Seed the latest market price into the broker's price cache.
+    ///
+    /// Must be called before submitting a market order so PaperBroker
+    /// can fill at the correct reference price instead of Decimal::ZERO.
+    /// No-op for Alpaca broker (fills at real market price).
+    pub async fn update_price(&self, symbol: &str, price: Decimal) {
+        self.broker.on_price_update(symbol, price).await;
     }
 
     // ── Database helpers ──────────────────────────────────────────────────────
@@ -620,6 +674,142 @@ mod tests {
             "postgres://quantai:quantai_dev_2026@localhost:5432/quantai".into()
         });
         sqlx::PgPool::connect(&url).await.ok()
+    }
+
+    // ── Helper: receive one fill with a generous timeout ──────────────────────
+    async fn recv_fill(rx: &mut tokio::sync::mpsc::Receiver<crate::types::Fill>) -> crate::types::Fill {
+        tokio::time::timeout(tokio::time::Duration::from_millis(500), rx.recv())
+            .await
+            .expect("fill receive timeout")
+            .expect("fill channel closed")
+    }
+
+    #[tokio::test]
+    async fn end_to_end_paper_loop() {
+        let Some(pool) = try_pool().await else {
+            eprintln!("PostgreSQL not available — skipping e2e integration test");
+            return;
+        };
+
+        // Clean up so the test is idempotent across repeated runs.
+        sqlx::query("DELETE FROM fills   WHERE strategy_id = 'e2e_test'").execute(&pool).await.ok();
+        sqlx::query("DELETE FROM orders  WHERE strategy_id = 'e2e_test'").execute(&pool).await.ok();
+        sqlx::query("DELETE FROM positions WHERE symbol IN ('AAPL','BTC-USD','EUR-USD')").execute(&pool).await.ok();
+        sqlx::query("DELETE FROM risk_events WHERE symbol IN ('AAPL','BTC-USD','EUR-USD')").execute(&pool).await.ok();
+
+        let (paper_broker, mut fill_rx) = PaperBroker::new(PaperConfig {
+            base_latency_ms: 10,
+            latency_jitter_ms: 5,
+            ..Default::default()
+        });
+
+        // Seed latest prices into the broker's internal price cache.
+        // PaperBroker fills market orders at last_prices[symbol] + slippage.
+        paper_broker.on_price_update("AAPL",    dec!(180.00)).await;
+        paper_broker.on_price_update("BTC-USD", dec!(67000.00)).await;
+        paper_broker.on_price_update("EUR-USD", dec!(1.0875)).await;
+
+        let broker: Arc<dyn Broker> = Arc::new(paper_broker);
+        let oms = OmsManager::new(pool.clone(), broker, dec!(100_000))
+            .await
+            .unwrap();
+
+        // ── Trade 1: AAPL Buy 10 shares ──────────────────────────────────────
+        // order_value = 10 × $180 = $1,800 (< 5% × $100k = $5,000) ✓
+        let o1 = Order::new_market("AAPL", Side::Buy, dec!(10), dec!(170.00), 0.82, "e2e_test");
+        let id1 = oms.submit(o1, dec!(180.00)).await.expect("Trade 1 submit");
+        let f1 = recv_fill(&mut fill_rx).await;
+        oms.apply_fill(f1.clone()).await.unwrap();
+        println!("Trade 1 AAPL  BUY  10 @ ~${:.2} | comm=${:.4} | id={id1}",
+            f1.fill_price, f1.commission);
+
+        // ── Trade 2: BTC-USD Buy 0.03 BTC ────────────────────────────────────
+        // order_value = 0.03 × $67,000 = $2,010 ✓
+        let o2 = Order::new_market("BTC-USD", Side::Buy, dec!(0.03), dec!(63000.00), 0.78, "e2e_test");
+        let id2 = oms.submit(o2, dec!(67000.00)).await.expect("Trade 2 submit");
+        let f2 = recv_fill(&mut fill_rx).await;
+        oms.apply_fill(f2.clone()).await.unwrap();
+        println!("Trade 2 BTC-USD BUY  0.03 @ ~${:.2} | comm=${:.4} | id={id2}",
+            f2.fill_price, f2.commission);
+
+        // ── Trade 3: EUR-USD Buy 1,000 units ─────────────────────────────────
+        // order_value = 1,000 × $1.0875 = $1,087.50 ✓
+        let o3 = Order::new_market("EUR-USD", Side::Buy, dec!(1000), dec!(1.0400), 0.71, "e2e_test");
+        let id3 = oms.submit(o3, dec!(1.0875)).await.expect("Trade 3 submit");
+        let f3 = recv_fill(&mut fill_rx).await;
+        oms.apply_fill(f3.clone()).await.unwrap();
+        println!("Trade 3 EUR-USD BUY  1000 @ ~${:.5} | comm=${:.4} | id={id3}",
+            f3.fill_price, f3.commission);
+
+        // ── Trade 4: AAPL Sell 10 (close long) ───────────────────────────────
+        // stop_loss must be ABOVE current price for a sell order.
+        // existing exposure = 10 × $180 = $1,800; new = $1,800; total = $3,600 ✓
+        let o4 = Order::new_market("AAPL", Side::Sell, dec!(10), dec!(190.00), 0.80, "e2e_test");
+        let id4 = oms.submit(o4, dec!(180.00)).await.expect("Trade 4 submit");
+        let f4 = recv_fill(&mut fill_rx).await;
+        oms.apply_fill(f4.clone()).await.unwrap();
+        println!("Trade 4 AAPL  SELL 10 @ ~${:.2} | comm=${:.4} | id={id4}",
+            f4.fill_price, f4.commission);
+
+        // ── Trade 5: BTC-USD Sell 0.03 (close long) ──────────────────────────
+        // existing exposure = 0.03 × $67,000 = $2,010; new = $2,010; total = $4,020 ✓
+        let o5 = Order::new_market("BTC-USD", Side::Sell, dec!(0.03), dec!(71000.00), 0.77, "e2e_test");
+        let id5 = oms.submit(o5, dec!(67000.00)).await.expect("Trade 5 submit");
+        let f5 = recv_fill(&mut fill_rx).await;
+        oms.apply_fill(f5.clone()).await.unwrap();
+        println!("Trade 5 BTC-USD SELL 0.03 @ ~${:.2} | comm=${:.4} | id={id5}",
+            f5.fill_price, f5.commission);
+
+        // ── Verify DB ─────────────────────────────────────────────────────────
+        let fill_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM fills WHERE strategy_id = 'e2e_test'"
+        )
+        .fetch_one(&pool).await.unwrap_or(Some(0)).unwrap_or(0);
+        assert_eq!(fill_count, 5, "Expected 5 fills in DB, got {fill_count}");
+
+        let filled_orders: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM orders WHERE strategy_id = 'e2e_test' AND status = 'FILLED'"
+        )
+        .fetch_one(&pool).await.unwrap_or(Some(0)).unwrap_or(0);
+        assert_eq!(filled_orders, 5, "Expected 5 FILLED orders in DB, got {filled_orders}");
+
+        // ── Print fills (equivalent to SELECT * FROM fills ORDER BY timestamp) ─
+        println!("\n=== fills (e2e_test) ===");
+        println!("{:<38} {:<8} {:<5} {:>12} {:>12} {:>12} {:>12}",
+            "fill_id", "symbol", "side", "qty", "price", "commission", "gross_value");
+        println!("{}", "-".repeat(110));
+
+        let rows = sqlx::query!(
+            r#"SELECT fill_id, symbol, side, filled_quantity, fill_price,
+                      commission, gross_value, timestamp
+               FROM fills WHERE strategy_id = 'e2e_test' ORDER BY timestamp ASC"#
+        )
+        .fetch_all(&pool).await.unwrap();
+
+        for row in &rows {
+            println!("{} {:<8} {:<5} {:>12} {:>12} {:>12} {:>12}",
+                row.fill_id,
+                row.symbol,
+                row.side,
+                row.filled_quantity.to_string(),
+                row.fill_price.to_string(),
+                row.commission.to_string(),
+                row.gross_value.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            );
+        }
+
+        // ── Print final positions ─────────────────────────────────────────────
+        println!("\n=== positions (in-memory) ===");
+        let positions = oms.positions.read().await;
+        for (sym, pos) in positions.iter() {
+            println!("  {:<10} qty={:>10} avg_cost={:>12} realized_pnl={:>12}",
+                sym, pos.quantity, pos.average_cost, pos.realized_pnl);
+        }
+
+        let snap = oms.portfolio_snapshot().await;
+        println!("\nPortfolio: total_value=${:.2}  daily_pnl=${:.4}  open_orders={}",
+            snap.total_value, snap.daily_pnl, snap.open_order_count);
+        println!("\n✓ Paper trading loop complete: 5/5 trades filled and logged to PostgreSQL");
     }
 
     #[tokio::test]
