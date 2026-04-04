@@ -32,7 +32,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     error::TradingError,
@@ -281,11 +281,20 @@ impl PubSubClient {
             .map_err(|e| TradingError::Gcp(format!("Pub/Sub parse error: {e}")))?;
 
         let message_id = resp.message_ids.into_iter().next().unwrap_or_default();
-        debug!(topic = %topic, message_id = %message_id, "Pub/Sub: message published");
+        if message_id.is_empty() {
+            warn!(topic = %topic, "Pub/Sub: message accepted but no message_id returned");
+        } else {
+            debug!(topic = %topic, message_id = %message_id, "Pub/Sub: message published");
+        }
         Ok(message_id)
     }
 
     /// Get a valid access token, refreshing from the best available source.
+    ///
+    /// Priority order (ADR-002: GCP is always downstream, credentials must be flexible):
+    ///   1. GCE / Cloud Run metadata server  (production)
+    ///   2. Application Default Credentials  (`gcloud auth application-default login`)
+    ///   3. GCP_ACCESS_TOKEN env var          (CI / manual override)
     async fn get_access_token(&self) -> Result<String, TradingError> {
         let mut cache = self.token_cache.lock().await;
 
@@ -304,12 +313,21 @@ impl PubSubClient {
             return Ok(token);
         }
 
-        // Priority 2: GCP_ACCESS_TOKEN env var (local dev / CI)
+        // Priority 2: Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS
+        // or ~/.config/gcloud/application_default_credentials.json)
+        if let Ok((token, expires_in)) = self.fetch_adc_token().await {
+            *cache = Some(CachedToken {
+                token: token.clone(),
+                expires_at: Instant::now() + Duration::from_secs(expires_in),
+            });
+            return Ok(token);
+        }
+
+        // Priority 3: GCP_ACCESS_TOKEN env var (CI / manual override)
         if let Ok(token) = std::env::var("GCP_ACCESS_TOKEN") {
             if !token.is_empty() {
                 *cache = Some(CachedToken {
                     token: token.clone(),
-                    // Assume the manually-set token expires in 1 hour
                     expires_at: Instant::now() + Duration::from_secs(3600),
                 });
                 return Ok(token);
@@ -317,8 +335,9 @@ impl PubSubClient {
         }
 
         Err(TradingError::Gcp(
-            "No GCP credentials found. Set GCP_ACCESS_TOKEN or run on GCE/Cloud Run. \
-             See First Run section in CLAUDE.md."
+            "No GCP credentials found. Run 'gcloud auth application-default login', \
+             set GCP_ACCESS_TOKEN, or run on GCE/Cloud Run. \
+             See GCP Infrastructure section in CLAUDE.md."
                 .into(),
         ))
     }
@@ -342,6 +361,92 @@ impl PubSubClient {
 
         let token: MetadataToken = response.json().await?;
         Ok(token.access_token)
+    }
+
+    /// Fetch an access token from Application Default Credentials.
+    ///
+    /// Reads from `GOOGLE_APPLICATION_CREDENTIALS` if set, otherwise falls back
+    /// to `~/.config/gcloud/application_default_credentials.json` (set by
+    /// `gcloud auth application-default login`). Only `authorized_user` type is
+    /// supported here — service account keys are handled via metadata server.
+    async fn fetch_adc_token(&self) -> Result<(String, u64), TradingError> {
+        #[derive(Deserialize)]
+        struct AdcFile {
+            #[serde(rename = "type")]
+            cred_type: String,
+            client_id: Option<String>,
+            client_secret: Option<String>,
+            refresh_token: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            expires_in: u64,
+        }
+
+        let adc_path = if let Ok(path) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+            std::path::PathBuf::from(path)
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+            std::path::PathBuf::from(home)
+                .join(".config/gcloud/application_default_credentials.json")
+        };
+
+        let content = tokio::fs::read_to_string(&adc_path).await.map_err(|e| {
+            TradingError::Gcp(format!("ADC file not readable at {}: {e}", adc_path.display()))
+        })?;
+
+        let creds: AdcFile = serde_json::from_str(&content)
+            .map_err(|e| TradingError::Gcp(format!("ADC parse error: {e}")))?;
+
+        if creds.cred_type != "authorized_user" {
+            return Err(TradingError::Gcp(format!(
+                "ADC type '{}' not supported (expected authorized_user)",
+                creds.cred_type
+            )));
+        }
+
+        let client_id = creds
+            .client_id
+            .ok_or_else(|| TradingError::Gcp("ADC missing client_id".into()))?;
+        let client_secret = creds
+            .client_secret
+            .ok_or_else(|| TradingError::Gcp("ADC missing client_secret".into()))?;
+        let refresh_token = creds
+            .refresh_token
+            .ok_or_else(|| TradingError::Gcp("ADC missing refresh_token".into()))?;
+
+        let params = [
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("refresh_token", refresh_token.as_str()),
+        ];
+
+        let response = self
+            .http
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| TradingError::Gcp(format!("ADC token refresh HTTP error: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(TradingError::Gcp(format!(
+                "ADC token refresh failed: HTTP {status}: {body}"
+            )));
+        }
+
+        let resp: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| TradingError::Gcp(format!("ADC token parse error: {e}")))?;
+
+        debug!("ADC: access token refreshed (expires_in={}s)", resp.expires_in);
+        Ok((resp.access_token, resp.expires_in))
     }
 }
 

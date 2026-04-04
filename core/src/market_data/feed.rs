@@ -12,9 +12,9 @@
 //   tick:{SYMBOL}            → JSON-encoded Tick (latest snapshot)
 //   ticks:{SYMBOL}           → pub/sub channel for real-time delivery
 //
-// In Phase 1 the IBKR data source is stubbed; ticks are pushed to Redis
+// In Phase 1 the Alpaca data source is stubbed; ticks are pushed to Redis
 // externally (e.g., from the Python strategy layer via redis-py, or from a
-// separate IBKR-to-Redis bridge process). The feed layer is source-agnostic.
+// separate Alpaca-to-Redis bridge process). The feed layer is source-agnostic.
 
 use std::sync::Arc;
 
@@ -116,7 +116,7 @@ impl RedisFeed {
         })
     }
 
-    // ── Publisher API (called from IBKR data bridge / paper broker) ───────────
+    // ── Publisher API (called from Alpaca data bridge / paper broker) ──────────
 
     /// Publish a tick to Redis.
     ///

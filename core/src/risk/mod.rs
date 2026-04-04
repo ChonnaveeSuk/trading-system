@@ -179,6 +179,8 @@ impl RiskEngine {
         let max_allowed = portfolio_value * self.config.max_position_pct;
 
         if order_value > max_allowed {
+            // f64::MAX is a safe sentinel — the trading decision is already made;
+            // this value only surfaces in the error message / log.
             let pct = (order_value / portfolio_value * dec!(100))
                 .try_into()
                 .unwrap_or(f64::MAX);
@@ -236,6 +238,7 @@ impl RiskEngine {
         }
         let loss_pct = daily_pnl.abs() / portfolio_value;
         if loss_pct >= self.config.max_daily_loss_pct {
+            // Sentinel fallbacks: halt decision is already made; values are display-only.
             let loss_f = loss_pct.try_into().unwrap_or(f64::MAX);
             let limit_f = self.config.max_daily_loss_pct.try_into().unwrap_or(0.10);
             warn!(loss_pct = loss_f, limit_pct = limit_f, "DAILY LOSS HALT TRIGGERED");
@@ -257,6 +260,7 @@ impl RiskEngine {
         }
         let drawdown = (peak_value - current_value) / peak_value;
         if drawdown >= self.config.max_drawdown_pct {
+            // Sentinel fallbacks: halt decision is already made; values are display-only.
             let dd_f = drawdown.try_into().unwrap_or(f64::MAX);
             let limit_f = self.config.max_drawdown_pct.try_into().unwrap_or(0.20);
             warn!(drawdown_pct = dd_f, limit_pct = limit_f, "DRAWDOWN HALT TRIGGERED");

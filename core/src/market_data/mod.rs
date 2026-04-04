@@ -4,7 +4,7 @@
 //
 // Phase 1 implementation: feed.rs — Redis-backed tick publisher + subscriber.
 //
-// Architecture: ticks arrive from IBKR (Phase 1.5) or a bridge process,
+// Architecture: ticks arrive from Alpaca WebSocket (Phase 4) or a bridge process,
 // get written to Redis, and are optionally published to GCP Pub/Sub
 // (fire-and-forget, per ADR-002).
 
