@@ -62,5 +62,5 @@ def verify_paper_mode(project_id: str) -> None:
     logger.info("Trading mode verified: %s", mode)
 
 
-# TODO Phase 1: class BigQueryClient (stream trades, ohlcv, signals)
-# TODO Phase 1: class PubSubClient (subscribe to fills topic)
+# Phase 4: class BigQueryClient — query trades/ohlcv/signals for analysis
+# Phase 4: class PubSubClient  — subscribe to fills topic for real-time P&L

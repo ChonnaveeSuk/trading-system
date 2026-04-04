@@ -42,5 +42,4 @@ class SignalResult:
             raise ValueError(f"score must be in [0.0, 1.0], got {self.score}")
 
 
-# TODO Phase 2: from .momentum import MomentumStrategy
-# TODO Phase 2: from .mean_reversion import MeanReversionStrategy
+from .momentum import MomentumStrategy, MomentumConfig  # noqa: F401  (available for import)
