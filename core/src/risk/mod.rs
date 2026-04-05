@@ -35,6 +35,11 @@ pub struct RiskConfig {
     pub min_signal_score: f64,
     /// Maximum simultaneous open orders. Hardcoded: 10.
     pub max_open_orders: usize,
+    /// Enable ATR-based position sizing when computing order quantities.
+    /// When true, callers should use `size_from_atr` before submitting.
+    /// check_order itself remains stateless (ADR-003) — it only validates
+    /// that the resulting size fits within max_position_pct.
+    pub atr_sizing: bool,
 }
 
 impl Default for RiskConfig {
@@ -45,7 +50,109 @@ impl Default for RiskConfig {
             max_drawdown_pct: dec!(0.20),   // 20%
             min_signal_score: 0.55,
             max_open_orders: 10,
+            atr_sizing: true,
         }
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ATR Utility Functions
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Compute ATR(period) from aligned high/low/close slices.
+///
+/// Uses Wilder's smoothed average (simple rolling mean for simplicity/speed).
+/// Returns `None` when there are fewer than `period + 1` bars or if any bar
+/// contains a non-finite value.
+///
+/// # Arguments
+/// - `highs`  — slice of bar high prices (must be same length as `lows`/`closes`)
+/// - `lows`   — slice of bar low prices
+/// - `closes` — slice of bar close prices
+/// - `period` — ATR lookback period (14 is the Wilder standard)
+///
+/// # Example
+/// ```
+/// use quantai_core::risk::atr_from_bars;
+/// let atr = atr_from_bars(
+///     &[102.0, 103.5, 101.0],
+///     &[99.5,  101.0, 99.0],
+///     &[101.0, 102.0, 100.0],
+///     2,
+/// );
+/// assert!(atr.is_some());
+/// ```
+pub fn atr_from_bars(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Option<f64> {
+    let n = highs.len();
+    if n != lows.len() || n != closes.len() {
+        return None;
+    }
+    if period == 0 || n < period + 1 {
+        return None;
+    }
+
+    // True Range for each bar (requires previous close)
+    let mut tr_values: Vec<f64> = Vec::with_capacity(n - 1);
+    for i in 1..n {
+        let h = highs[i];
+        let l = lows[i];
+        let prev_c = closes[i - 1];
+        if !h.is_finite() || !l.is_finite() || !prev_c.is_finite() {
+            return None;
+        }
+        let tr = (h - l)
+            .max((h - prev_c).abs())
+            .max((l - prev_c).abs());
+        tr_values.push(tr);
+    }
+
+    // Simple rolling mean over the last `period` TR values
+    let start = tr_values.len().saturating_sub(period);
+    let window = &tr_values[start..];
+    if window.len() < period {
+        return None;
+    }
+    let atr = window.iter().sum::<f64>() / period as f64;
+    if atr.is_finite() && atr > 0.0 {
+        Some(atr)
+    } else {
+        None
+    }
+}
+
+/// Compute ATR-based position size (number of units/shares).
+///
+/// Formula: `qty = (account_equity × risk_pct) / (atr × atr_multiplier)`
+/// The result is capped at `max_position_pct × account_equity / price`.
+///
+/// # Arguments
+/// - `account_equity`   — total portfolio value in USD
+/// - `risk_pct`         — fraction of equity to risk per ATR unit (e.g. 0.01 = 1%)
+/// - `atr`              — ATR value for the symbol (must be > 0)
+/// - `atr_multiplier`   — stop width in ATR units (default 2.0 per task spec)
+/// - `max_position_pct` — hard cap as fraction of equity (e.g. 0.05 = 5%)
+/// - `price`            — current price of the instrument (must be > 0)
+///
+/// Returns `None` when inputs are invalid (non-positive price/atr, zero equity).
+pub fn size_from_atr(
+    account_equity: f64,
+    risk_pct: f64,
+    atr: f64,
+    atr_multiplier: f64,
+    max_position_pct: f64,
+    price: f64,
+) -> Option<f64> {
+    if account_equity <= 0.0 || atr <= 0.0 || price <= 0.0 || atr_multiplier <= 0.0 {
+        return None;
+    }
+    let risk_dollars = account_equity * risk_pct;
+    let raw_qty = risk_dollars / (atr * atr_multiplier);
+    let max_qty = (account_equity * max_position_pct) / price;
+    let qty = raw_qty.min(max_qty);
+    if qty > 0.0 {
+        Some(qty)
+    } else {
+        None
     }
 }
 
@@ -590,5 +697,91 @@ mod tests {
             dec!(100_000),
         );
         assert!(matches!(result, Err(RiskError::TooManyOpenOrders { .. })));
+    }
+
+    // ── ATR config flag ────────────────────────────────────────────────────────
+
+    #[test]
+    fn atr_sizing_enabled_by_default() {
+        assert!(RiskConfig::default().atr_sizing);
+    }
+
+    // ── atr_from_bars ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn atr_from_bars_basic() {
+        // 15 bars of synthetic data: high = close+1, low = close-1 → TR ≈ 2
+        let closes: Vec<f64> = (0..15).map(|i| 100.0 + i as f64 * 0.1).collect();
+        let highs: Vec<f64>  = closes.iter().map(|c| c + 1.0).collect();
+        let lows:  Vec<f64>  = closes.iter().map(|c| c - 1.0).collect();
+        let atr = atr_from_bars(&highs, &lows, &closes, 14);
+        assert!(atr.is_some(), "Expected valid ATR");
+        // With high-low = 2 and prev-close gaps < 2, ATR ≈ 2.0
+        let val = atr.unwrap();
+        assert!(val > 0.0 && val <= 3.0, "ATR={val} out of expected range");
+    }
+
+    #[test]
+    fn atr_from_bars_returns_none_insufficient_bars() {
+        let closes = vec![100.0, 101.0, 102.0];
+        let highs  = closes.iter().map(|c| c + 0.5).collect::<Vec<_>>();
+        let lows   = closes.iter().map(|c| c - 0.5).collect::<Vec<_>>();
+        // period=14 but only 3 bars → None
+        assert!(atr_from_bars(&highs, &lows, &closes, 14).is_none());
+    }
+
+    #[test]
+    fn atr_from_bars_returns_none_on_zero_period() {
+        let closes = vec![100.0; 20];
+        let highs  = closes.iter().map(|c| c + 1.0).collect::<Vec<_>>();
+        let lows   = closes.iter().map(|c| c - 1.0).collect::<Vec<_>>();
+        assert!(atr_from_bars(&highs, &lows, &closes, 0).is_none());
+    }
+
+    #[test]
+    fn atr_from_bars_returns_none_on_mismatched_lengths() {
+        let highs  = vec![101.0, 102.0, 103.0];
+        let lows   = vec![99.0, 100.0];  // length mismatch
+        let closes = vec![100.0, 101.0, 102.0];
+        assert!(atr_from_bars(&highs, &lows, &closes, 2).is_none());
+    }
+
+    #[test]
+    fn atr_from_bars_rejects_non_finite() {
+        let closes = vec![100.0; 16];
+        let mut highs: Vec<f64> = closes.iter().map(|c| c + 1.0).collect();
+        highs[5] = f64::NAN; // inject NaN
+        let lows: Vec<f64> = closes.iter().map(|c| c - 1.0).collect();
+        assert!(atr_from_bars(&highs, &lows, &closes, 14).is_none());
+    }
+
+    // ── size_from_atr ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn size_from_atr_basic() {
+        // equity=$100k, risk=1%, ATR=$2, multiplier=2.0 → raw=500 shares
+        // 5% cap at $100/share = 50 shares → capped at 50
+        let qty = size_from_atr(100_000.0, 0.01, 2.0, 2.0, 0.05, 100.0);
+        assert!(qty.is_some());
+        let q = qty.unwrap();
+        assert!((q - 50.0).abs() < 0.01, "Expected ~50 shares (capped), got {q}");
+    }
+
+    #[test]
+    fn size_from_atr_uncapped() {
+        // equity=$100k, risk=1%, ATR=$50, multiplier=2.0 → raw=10 shares
+        // 5% cap at $100/share = 50 shares → 10 < 50, not capped
+        let qty = size_from_atr(100_000.0, 0.01, 50.0, 2.0, 0.05, 100.0);
+        assert!(qty.is_some());
+        let q = qty.unwrap();
+        assert!((q - 10.0).abs() < 0.01, "Expected 10 shares, got {q}");
+    }
+
+    #[test]
+    fn size_from_atr_returns_none_on_invalid_inputs() {
+        assert!(size_from_atr(0.0,       0.01, 2.0, 2.0, 0.05, 100.0).is_none(), "zero equity");
+        assert!(size_from_atr(100_000.0, 0.01, 0.0, 2.0, 0.05, 100.0).is_none(), "zero atr");
+        assert!(size_from_atr(100_000.0, 0.01, 2.0, 2.0, 0.05, 0.0  ).is_none(), "zero price");
+        assert!(size_from_atr(100_000.0, 0.01, 2.0, 0.0, 0.05, 100.0).is_none(), "zero multiplier");
     }
 }
