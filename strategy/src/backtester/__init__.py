@@ -35,6 +35,20 @@ class BacktestConfig:
     min_sharpe: float = 1.0
     max_drawdown: float = 0.15
 
+    # Trailing stop loss (position management rule, applied in simulation)
+    # When enabled: stop trails trailing_stop_atr_mult× ATR(14) below the highest
+    # price since entry. Stop is one-way: it only moves up (for longs), never down.
+    # ATR is fixed at the bar of entry to prevent stop-widening on vol spikes.
+    #
+    # Default: False — backtesting without trailing stop preserves the baseline
+    # gate behaviour. Enable explicitly for live-trading simulations or when
+    # testing trailing stop impact on specific symbols/periods.
+    # Note: 2.0× outperforms 1.5× on 31-symbol simulation (MaxDD 8.86% vs 9.14%,
+    # Sharpe 1.61 vs 1.57), but BTC walk-forward pass rate regresses (6/14) due to
+    # additional trades pushing low-trade windows into the strict Sharpe gate.
+    trailing_stop: bool = False
+    trailing_stop_atr_mult: float = 2.0   # stop distance = mult × ATR(14)
+
 
 @dataclass
 class BacktestResult:

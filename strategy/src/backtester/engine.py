@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Optional
@@ -47,6 +48,23 @@ def _calc_commission(qty: float, price: float) -> float:
 def _apply_slippage(price: float, is_buy: bool) -> float:
     factor = SLIPPAGE_BPS / 10_000
     return price * (1 + factor) if is_buy else price * (1 - factor)
+
+
+def _compute_atr_series(price_df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Rolling ATR(period) aligned to price_df index.
+
+    Uses simple rolling mean of True Range (mirrors atr_from_bars in Rust).
+    Returns NaN for the first `period` bars before the window is warm.
+    """
+    high = price_df["high"].astype(float)
+    low  = price_df["low"].astype(float)
+    close = price_df["close"].astype(float)
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    return tr.rolling(period).mean()
 
 
 class BacktestEngine:
@@ -113,17 +131,36 @@ class BacktestEngine:
         position_cost = 0.0
         equity_curve: list[float] = [capital]
         daily_returns: list[float] = []
-        prev_mtm = starting_capital  # track previous bar's mark-to-market
+        prev_mtm = starting_capital
 
         trades: list[dict] = []
 
+        # Pre-compute ATR for trailing stop (aligned to df index)
+        atr_series_run: Optional[pd.Series] = (
+            _compute_atr_series(df) if self.config.trailing_stop else None
+        )
+        trail_distance: float = 0.0
+        trail_high: float = 0.0
+        trail_stop: float = 0.0
+
+        # Signals are indexed to a subset of df; iterate over signals then
+        # look up current price from df to handle any gaps.
         for ts, sig in signals.iterrows():
-            price = df.loc[ts, "close"]
-            direction = sig["direction"]
-            score = sig["score"]
+            price = float(df.loc[ts, "close"])
+            direction = str(sig["direction"])
+            score = float(sig["score"])
+
+            # Update trailing stop ratchet before processing the signal
+            stop_triggered = False
+            if self.config.trailing_stop and position_qty > 0 and trail_distance > 0:
+                trail_high = max(trail_high, price)
+                new_stop = trail_high - trail_distance
+                trail_stop = max(trail_stop, new_stop)
+                if price <= trail_stop:
+                    stop_triggered = True
+                    direction = "SELL"
 
             if direction == "BUY" and position_qty == 0:
-                # Open long
                 notional = capital * position_pct
                 qty = notional / price
                 fill_price = _apply_slippage(price, is_buy=True)
@@ -134,6 +171,20 @@ class BacktestEngine:
                     capital -= cost
                     position_qty = qty
                     position_cost = qty * fill_price
+
+                    trail_high = fill_price
+                    atr_raw = float("nan")
+                    if atr_series_run is not None and ts in atr_series_run.index:
+                        v = float(atr_series_run.loc[ts])
+                        if not math.isnan(v) and v > 0:
+                            atr_raw = v
+                    trail_distance = (
+                        self.config.trailing_stop_atr_mult * atr_raw
+                        if not math.isnan(atr_raw)
+                        else fill_price * 0.02
+                    )
+                    trail_stop = fill_price - trail_distance
+
                     trades.append({
                         "date": str(ts.date()),
                         "side": "BUY",
@@ -141,19 +192,18 @@ class BacktestEngine:
                         "price": fill_price,
                         "commission": commission,
                         "score": score,
+                        "trail_stop_initial": round(trail_stop, 5),
                     })
 
             elif direction == "SELL" and position_qty > 0:
-                # Close long
                 fill_price = _apply_slippage(price, is_buy=False)
                 commission = _calc_commission(position_qty, fill_price)
                 proceeds = position_qty * fill_price - commission
-
                 pnl = proceeds - position_cost
                 capital += proceeds
                 trades.append({
                     "date": str(ts.date()),
-                    "side": "SELL",
+                    "side": "SELL (trail)" if stop_triggered else "SELL",
                     "qty": position_qty,
                     "price": fill_price,
                     "commission": commission,
@@ -162,19 +212,21 @@ class BacktestEngine:
                 })
                 position_qty = 0.0
                 position_cost = 0.0
+                trail_distance = 0.0
+                trail_high = 0.0
+                trail_stop = 0.0
 
-            # Mark-to-market: open position valued at today's close
             mtm_value = capital + position_qty * price
             equity_curve.append(mtm_value)
             peak_capital = max(peak_capital, mtm_value)
-
-            daily_return = (mtm_value - prev_mtm) / prev_mtm if prev_mtm > 0 else 0.0
-            daily_returns.append(daily_return)
+            daily_returns.append(
+                (mtm_value - prev_mtm) / prev_mtm if prev_mtm > 0 else 0.0
+            )
             prev_mtm = mtm_value
 
         # Close any open position at last close
         if position_qty > 0:
-            last_price = df["close"].iloc[-1]
+            last_price = float(df["close"].iloc[-1])
             fill_price = _apply_slippage(last_price, is_buy=False)
             commission = _calc_commission(position_qty, fill_price)
             proceeds = position_qty * fill_price - commission
@@ -362,7 +414,9 @@ class BacktestEngine:
 
             # Simulate trades on the OOS period
             oos_result = self._simulate_on_slice(
-                oos_df, oos_signals, starting_capital, position_pct
+                oos_df, oos_signals, starting_capital, position_pct,
+                trailing_stop=self.config.trailing_stop,
+                trailing_atr_mult=self.config.trailing_stop_atr_mult,
             )
 
             returns_arr = np.array(oos_result["daily_returns"])
@@ -440,32 +494,63 @@ class BacktestEngine:
         signals: pd.DataFrame,
         starting_capital: float,
         position_pct: float,
+        trailing_stop: bool = False,
+        trailing_atr_mult: float = 2.0,
     ) -> dict:
-        """Simulate trades for a single OOS slice. Returns raw metrics dict."""
+        """Simulate trades for a single OOS slice. Returns raw metrics dict.
+
+        Trailing stop (when trailing_stop=True):
+          - Distance fixed at entry: trail_distance = trailing_atr_mult × ATR(14)
+          - High watermark ratchets up bar-by-bar; stop = watermark − trail_distance
+          - Stop only moves up (one-way ratchet for longs)
+          - Fires a synthetic SELL when close ≤ trail_stop
+          - Falls back to 2 % of entry price when ATR is unavailable
+        """
         capital = starting_capital
         position_qty = 0.0
         position_cost = 0.0
         equity_curve: list[float] = [capital]
         daily_returns: list[float] = []
         trades: list[dict] = []
-        prev_mtm = starting_capital  # track previous bar's mark-to-market
+        prev_mtm = starting_capital
+
+        # Pre-compute ATR series for the full price slice (used at BUY entry)
+        atr_series: Optional[pd.Series] = (
+            _compute_atr_series(price_df) if trailing_stop else None
+        )
+
+        # Per-position trailing stop state (reset on each new BUY)
+        trail_distance: float = 0.0   # fixed at entry bar's ATR × mult
+        trail_high: float = 0.0       # running high watermark since entry
+        trail_stop: float = 0.0       # current stop price (ratchets up only)
 
         for ts in price_df.index:
-            price = price_df.loc[ts, "close"]
+            price = float(price_df.loc[ts, "close"])
 
-            if ts not in signals.index:
-                curr_mtm = capital + position_qty * price
-                equity_curve.append(curr_mtm)
-                daily_returns.append(
-                    (curr_mtm - prev_mtm) / prev_mtm if prev_mtm > 0 else 0.0
-                )
-                prev_mtm = curr_mtm
-                continue
+            # ── Update trailing stop ratchet ───────────────────────────────
+            # Must happen before signal processing so the stop reflects the
+            # current bar's price before we decide whether to sell.
+            stop_triggered = False
+            if trailing_stop and position_qty > 0 and trail_distance > 0:
+                trail_high = max(trail_high, price)
+                new_stop = trail_high - trail_distance
+                trail_stop = max(trail_stop, new_stop)  # one-way ratchet
+                if price <= trail_stop:
+                    stop_triggered = True
 
-            sig = signals.loc[ts]
-            direction = sig["direction"]
-            score = sig["score"]
+            # ── Get signal (HOLD if bar has no pre-computed signal) ────────
+            direction = "HOLD"
+            score = 0.0
+            if ts in signals.index:
+                sig = signals.loc[ts]
+                direction = str(sig["direction"])
+                score = float(sig["score"])
 
+            # Trailing stop overrides any signal
+            if stop_triggered:
+                direction = "SELL"
+
+            # ── Execute trade ──────────────────────────────────────────────
             if direction == "BUY" and position_qty == 0:
                 notional = capital * position_pct
                 qty = notional / price
@@ -476,10 +561,26 @@ class BacktestEngine:
                     capital -= cost
                     position_qty = qty
                     position_cost = qty * fill_price
+
+                    # Initialise trailing stop for this position
+                    trail_high = fill_price
+                    atr_raw = float("nan")
+                    if atr_series is not None and ts in atr_series.index:
+                        v = float(atr_series.loc[ts])
+                        if not math.isnan(v) and v > 0:
+                            atr_raw = v
+                    trail_distance = (
+                        trailing_atr_mult * atr_raw
+                        if not math.isnan(atr_raw)
+                        else fill_price * 0.02   # 2% fallback when ATR unavailable
+                    )
+                    trail_stop = fill_price - trail_distance
+
                     trades.append({
                         "date": str(ts.date()), "side": "BUY",
                         "qty": qty, "price": fill_price,
                         "commission": commission, "score": score,
+                        "trail_stop_initial": round(trail_stop, 5),
                     })
 
             elif direction == "SELL" and position_qty > 0:
@@ -488,13 +589,18 @@ class BacktestEngine:
                 proceeds = position_qty * fill_price - commission
                 pnl = proceeds - position_cost
                 capital += proceeds
+                side_label = "SELL (trail)" if stop_triggered else "SELL"
                 trades.append({
-                    "date": str(ts.date()), "side": "SELL",
+                    "date": str(ts.date()), "side": side_label,
                     "qty": position_qty, "price": fill_price,
                     "commission": commission, "pnl": pnl, "score": score,
                 })
+                # Reset position state
                 position_qty = 0.0
                 position_cost = 0.0
+                trail_distance = 0.0
+                trail_high = 0.0
+                trail_stop = 0.0
 
             mtm = capital + position_qty * price
             equity_curve.append(mtm)
@@ -503,9 +609,9 @@ class BacktestEngine:
             )
             prev_mtm = mtm
 
-        # Close any open position at last price
+        # Close any open position at the last bar's close
         if position_qty > 0 and not price_df.empty:
-            last_price = price_df["close"].iloc[-1]
+            last_price = float(price_df["close"].iloc[-1])
             fill_price = _apply_slippage(last_price, is_buy=False)
             commission = _calc_commission(position_qty, fill_price)
             proceeds = position_qty * fill_price - commission
