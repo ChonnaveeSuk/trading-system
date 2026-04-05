@@ -40,6 +40,10 @@ pub struct RiskConfig {
     /// check_order itself remains stateless (ADR-003) — it only validates
     /// that the resulting size fits within max_position_pct.
     pub atr_sizing: bool,
+    /// Enable trailing stop loss management for open positions.
+    /// When true, callers should create a `TrailingStopState` on BUY and
+    /// call `state.update(price)` on each new bar to advance the ratchet.
+    pub trailing_stop: bool,
 }
 
 impl Default for RiskConfig {
@@ -51,6 +55,7 @@ impl Default for RiskConfig {
             min_signal_score: 0.55,
             max_open_orders: 10,
             atr_sizing: true,
+            trailing_stop: true,
         }
     }
 }
@@ -153,6 +158,95 @@ pub fn size_from_atr(
         Some(qty)
     } else {
         None
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Trailing Stop State
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Per-symbol trailing stop state, owned by the caller (e.g. OmsManager).
+///
+/// The trailing stop is a one-way ratchet for long positions:
+///   - `trail_distance` is fixed at entry (1.5 × ATR at the time of BUY)
+///   - `high_watermark` ratchets up with each new price high after entry
+///   - `current_stop` = `high_watermark` − `trail_distance` (never moves down)
+///
+/// ADR-003: this struct holds per-position state; `check_order` itself remains
+/// stateless. The OmsManager (or position manager) is responsible for creating,
+/// updating, and discarding `TrailingStopState` on BUY / SELL events.
+///
+/// # Example
+/// ```
+/// use quantai_core::risk::TrailingStopState;
+/// use rust_decimal_macros::dec;
+///
+/// let mut ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+/// // Price rises — stop ratchets up
+/// ts.update(dec!(110.0));
+/// assert!(ts.current_stop() > dec!(100.0));
+/// // Price falls back — stop holds
+/// let stop_before = ts.current_stop();
+/// ts.update(dec!(105.0));
+/// assert_eq!(ts.current_stop(), stop_before);
+/// ```
+#[derive(Debug, Clone)]
+pub struct TrailingStopState {
+    /// Highest price seen since the position was opened.
+    pub high_watermark: Decimal,
+    /// Fixed trail distance: ATR_at_entry × multiplier (never changes after entry).
+    pub trail_distance: Decimal,
+    /// Current stop price. Only moves up (one-way ratchet for longs).
+    current_stop: Decimal,
+}
+
+impl TrailingStopState {
+    /// Create a new trailing stop at entry.
+    ///
+    /// # Arguments
+    /// - `entry_price`  — fill price at which the long was opened
+    /// - `atr`          — ATR value at entry (must be > 0; clamped to 0 if negative)
+    /// - `atr_mult`     — multiplier for the trail distance (e.g. 1.5)
+    pub fn new(entry_price: Decimal, atr: f64, atr_mult: f64) -> Self {
+        let atr_pos = atr.max(0.0);
+        let trail_dist_f = atr_pos * atr_mult;
+        // SAFETY: trail_dist_f is finite and non-negative (product of clamped f64s)
+        let trail_distance = Decimal::try_from(trail_dist_f).unwrap_or(Decimal::ZERO);
+        let current_stop = entry_price - trail_distance;
+        Self {
+            high_watermark: entry_price,
+            trail_distance,
+            current_stop,
+        }
+    }
+
+    /// Update the trailing stop with the latest price.
+    ///
+    /// Ratchets `high_watermark` up when `current_price` exceeds it, and
+    /// advances `current_stop` = `high_watermark` − `trail_distance`.
+    /// The stop **never moves down** — it is a one-way ratchet for longs.
+    ///
+    /// Returns the updated stop price.
+    pub fn update(&mut self, current_price: Decimal) -> Decimal {
+        if current_price > self.high_watermark {
+            self.high_watermark = current_price;
+            let new_stop = self.high_watermark - self.trail_distance;
+            // One-way ratchet: only advance if new stop is higher
+            if new_stop > self.current_stop {
+                self.current_stop = new_stop;
+            }
+        }
+        self.current_stop
+    }
+
+    /// Returns the current stop price.
+    pub fn current_stop(&self) -> Decimal {
+        self.current_stop
+    }
+
+    /// Returns `true` when `current_price` has fallen to or below the stop.
+    pub fn is_triggered(&self, current_price: Decimal) -> bool {
+        current_price <= self.current_stop
     }
 }
 
@@ -783,5 +877,79 @@ mod tests {
         assert!(size_from_atr(100_000.0, 0.01, 0.0, 2.0, 0.05, 100.0).is_none(), "zero atr");
         assert!(size_from_atr(100_000.0, 0.01, 2.0, 2.0, 0.05, 0.0  ).is_none(), "zero price");
         assert!(size_from_atr(100_000.0, 0.01, 2.0, 0.0, 0.05, 100.0).is_none(), "zero multiplier");
+    }
+
+    // ── TrailingStopState ──────────────────────────────────────────────────────
+
+    #[test]
+    fn trailing_stop_enabled_by_default() {
+        assert!(RiskConfig::default().trailing_stop);
+    }
+
+    #[test]
+    fn trailing_stop_new_sets_correct_initial_stop() {
+        // entry=100, atr=2.0, mult=1.5 → trail_distance=3.0, initial_stop=97.0
+        let ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        // initial stop = entry − trail_distance = 100 − 3 = 97
+        assert_eq!(ts.current_stop(), dec!(97.0));
+        assert_eq!(ts.high_watermark, dec!(100.0));
+    }
+
+    #[test]
+    fn trailing_stop_ratchets_up_on_new_high() {
+        let mut ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        // Price rises to 110 → watermark=110, stop=110-3=107
+        ts.update(dec!(110.0));
+        assert_eq!(ts.high_watermark, dec!(110.0));
+        assert_eq!(ts.current_stop(), dec!(107.0));
+    }
+
+    #[test]
+    fn trailing_stop_one_way_ratchet_does_not_retreat() {
+        let mut ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        ts.update(dec!(110.0));  // stop advances to 107
+        let stop_after_high = ts.current_stop();
+
+        // Price falls back to 105 (above stop — no trigger)
+        ts.update(dec!(105.0));
+        // Stop must NOT retreat below 107
+        assert_eq!(ts.current_stop(), stop_after_high,
+            "Stop retreated when price fell: was {stop_after_high}, now {}",
+            ts.current_stop());
+    }
+
+    #[test]
+    fn trailing_stop_is_triggered_at_stop_price() {
+        let ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        // Not triggered while above stop
+        assert!(!ts.is_triggered(dec!(100.0)));
+        assert!(!ts.is_triggered(dec!(98.0)));  // still above initial stop=97
+        // Triggered at or below the stop
+        assert!(ts.is_triggered(dec!(97.0)));
+        assert!(ts.is_triggered(dec!(90.0)));
+    }
+
+    #[test]
+    fn trailing_stop_not_triggered_while_above_stop() {
+        let mut ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        ts.update(dec!(115.0));  // stop now at 112
+        // 113 is above the stop (112) — must NOT trigger
+        assert!(!ts.is_triggered(dec!(113.0)));
+    }
+
+    #[test]
+    fn trailing_stop_zero_atr_falls_back_to_zero_distance() {
+        // Edge case: ATR = 0 → trail_distance = 0; stop is AT entry price
+        let ts = TrailingStopState::new(dec!(100.0), 0.0, 1.5);
+        assert_eq!(ts.trail_distance, Decimal::ZERO);
+        // Any price ≤ entry immediately triggers
+        assert!(ts.is_triggered(dec!(100.0)));
+    }
+
+    #[test]
+    fn trailing_stop_update_returns_current_stop() {
+        let mut ts = TrailingStopState::new(dec!(100.0), 2.0, 1.5);
+        let returned = ts.update(dec!(112.0));
+        assert_eq!(returned, ts.current_stop());
     }
 }
