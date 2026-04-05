@@ -143,12 +143,20 @@ class BacktestEngine:
         trail_high: float = 0.0
         trail_stop: float = 0.0
 
-        # Signals are indexed to a subset of df; iterate over signals then
-        # look up current price from df to handle any gaps.
-        for ts, sig in signals.iterrows():
-            price = float(df.loc[ts, "close"])
-            direction = str(sig["direction"])
-            score = float(sig["score"])
+        # Pre-extract arrays: eliminates per-iteration pandas .loc overhead.
+        # signals covers a subset of df (after MA warmup); align prices to it.
+        closes_run = df.loc[signals.index, "close"].to_numpy(dtype=float)
+        dirs_run   = signals["direction"].to_numpy()
+        scores_run = signals["score"].to_numpy(dtype=float)
+        atr_run_vals = (
+            atr_series_run.reindex(signals.index).to_numpy(dtype=float)
+            if atr_series_run is not None else None
+        )
+
+        for i, ts in enumerate(signals.index):
+            price     = closes_run[i]
+            direction = str(dirs_run[i])
+            score     = scores_run[i]
 
             # Update trailing stop ratchet before processing the signal
             stop_triggered = False
@@ -174,8 +182,8 @@ class BacktestEngine:
 
                     trail_high = fill_price
                     atr_raw = float("nan")
-                    if atr_series_run is not None and ts in atr_series_run.index:
-                        v = float(atr_series_run.loc[ts])
+                    if atr_run_vals is not None:
+                        v = atr_run_vals[i]
                         if not math.isnan(v) and v > 0:
                             atr_raw = v
                     trail_distance = (
@@ -519,13 +527,28 @@ class BacktestEngine:
             _compute_atr_series(price_df) if trailing_stop else None
         )
 
+        # Pre-extract arrays: eliminates per-iteration pandas .loc overhead.
+        # Signals cover a subset of price_df (after MA warmup); align both to
+        # price_df.index so every bar has a direction/score/close/atr value.
+        sig_dir   = signals["direction"].reindex(price_df.index, fill_value="HOLD")
+        sig_score = signals["score"].reindex(price_df.index, fill_value=0.0)
+        closes    = price_df["close"].to_numpy(dtype=float)
+        dirs      = sig_dir.to_numpy()
+        scores    = sig_score.to_numpy(dtype=float)
+        atr_vals  = (
+            atr_series.reindex(price_df.index).to_numpy(dtype=float)
+            if atr_series is not None else None
+        )
+
         # Per-position trailing stop state (reset on each new BUY)
         trail_distance: float = 0.0   # fixed at entry bar's ATR × mult
         trail_high: float = 0.0       # running high watermark since entry
         trail_stop: float = 0.0       # current stop price (ratchets up only)
 
-        for ts in price_df.index:
-            price = float(price_df.loc[ts, "close"])
+        for i, ts in enumerate(price_df.index):
+            price     = closes[i]
+            direction = str(dirs[i])
+            score     = scores[i]
 
             # ── Update trailing stop ratchet ───────────────────────────────
             # Must happen before signal processing so the stop reflects the
@@ -537,14 +560,6 @@ class BacktestEngine:
                 trail_stop = max(trail_stop, new_stop)  # one-way ratchet
                 if price <= trail_stop:
                     stop_triggered = True
-
-            # ── Get signal (HOLD if bar has no pre-computed signal) ────────
-            direction = "HOLD"
-            score = 0.0
-            if ts in signals.index:
-                sig = signals.loc[ts]
-                direction = str(sig["direction"])
-                score = float(sig["score"])
 
             # Trailing stop overrides any signal
             if stop_triggered:
@@ -565,8 +580,8 @@ class BacktestEngine:
                     # Initialise trailing stop for this position
                     trail_high = fill_price
                     atr_raw = float("nan")
-                    if atr_series is not None and ts in atr_series.index:
-                        v = float(atr_series.loc[ts])
+                    if atr_vals is not None:
+                        v = atr_vals[i]
                         if not math.isnan(v) and v > 0:
                             atr_raw = v
                     trail_distance = (

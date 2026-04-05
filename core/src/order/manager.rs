@@ -316,8 +316,21 @@ impl OmsManager {
             "OMS: fill received"
         );
 
+        // Single orders read — extract all per-order data needed downstream.
+        // This collapses three separate reads (db_insert_fill, position stop_loss,
+        // pubsub) into one RwLock acquisition on the hot fill path.
+        let (order_strategy_id, order_signal_score, order_stop_loss) = {
+            let orders = self.orders.read().await;
+            let order = orders.get(&client_id);
+            (
+                order.and_then(|o| o.strategy_id.clone()),
+                order.and_then(|o| o.signal_score),
+                order.and_then(|o| o.stop_loss),
+            )
+        };
+
         // ── 1. Insert fill to DB ───────────────────────────────────────────────
-        self.db_insert_fill(&fill).await?;
+        self.db_insert_fill(&fill, order_strategy_id.clone()).await?;
 
         // ── 2. Update order status to FILLED ──────────────────────────────────
         self.db_update_order_status(client_id, OrderStatus::Filled, fill.broker_order_id.as_deref()).await?;
@@ -342,10 +355,7 @@ impl OmsManager {
                 self.db_upsert_position(pos).await?;
             } else {
                 let mut new_pos = Position::from_fill(&fill);
-                new_pos.stop_loss = {
-                    let orders = self.orders.read().await;
-                    orders.get(&client_id).and_then(|o| o.stop_loss)
-                };
+                new_pos.stop_loss = order_stop_loss;
                 self.db_upsert_position(&new_pos).await?;
                 positions.insert(fill.symbol.clone(), new_pos);
             }
@@ -369,18 +379,8 @@ impl OmsManager {
         }
 
         // ── 5. GCP Pub/Sub fire-and-forget (ADR-002) ──────────────────────────
-        // Gather order metadata needed for the BigQuery record while we still
-        // hold the orders lock. Then spawn — never await on the hot path.
         if let Some(ref ps) = self.pubsub {
-            let (strategy_id, signal_score) = {
-                let orders = self.orders.read().await;
-                let order = orders.get(&client_id);
-                (
-                    order.and_then(|o| o.strategy_id.clone()),
-                    order.and_then(|o| o.signal_score),
-                )
-            };
-            let record = FillBqRecord::from_fill(&fill, strategy_id, signal_score, "paper");
+            let record = FillBqRecord::from_fill(&fill, order_strategy_id, order_signal_score, "paper");
             let ps = ps.clone();
             tokio::spawn(async move {
                 if let Err(e) = ps.publish_fill_bq(&record).await {
@@ -543,15 +543,7 @@ impl OmsManager {
         Ok(())
     }
 
-    async fn db_insert_fill(&self, fill: &Fill) -> Result<(), TradingError> {
-        // Look up strategy_id for denormalization
-        let strategy_id = {
-            let orders = self.orders.read().await;
-            orders
-                .get(&fill.client_order_id)
-                .and_then(|o| o.strategy_id.clone())
-        };
-
+    async fn db_insert_fill(&self, fill: &Fill, strategy_id: Option<String>) -> Result<(), TradingError> {
         sqlx::query!(
             r#"INSERT INTO fills
                (fill_id, client_order_id, broker_order_id, symbol, side,

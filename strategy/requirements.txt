@@ -12,8 +12,7 @@ google-auth==2.35.0
 # Data & ML
 pandas==2.2.3
 numpy==1.26.4
-scikit-learn==1.5.2
-scipy==1.14.1
+# scikit-learn and scipy removed — not imported anywhere in strategy code
 
 # Financial data
 # ibapi is installed manually from IBKR TWS API download (not on PyPI)
@@ -34,7 +33,7 @@ protobuf==5.28.3
 # Utilities
 python-dateutil==2.9.0
 pytz==2024.2
-tqdm==4.67.1
+# tqdm removed — progress bar not used in strategy code
 
 # Development / testing
 pytest==8.3.4
