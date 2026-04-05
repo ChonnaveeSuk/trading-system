@@ -348,3 +348,89 @@ class TestAtrSizing:
                 expected = int(portfolio * pos_pct / price)
                 assert int(result.suggested_quantity) == expected
                 break
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RSI score multiplier (rsi_filter flag)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRsiScoreMultiplier:
+    def test_rsi_filter_default_is_true(self):
+        assert MomentumConfig().rsi_filter is True
+
+    def test_rsi_filter_false_accepted(self):
+        cfg = MomentumConfig(rsi_filter=False)
+        assert cfg.rsi_filter is False
+
+    def test_oversold_buy_score_boosted(self):
+        """BUY score must be higher when RSI < 30 (oversold) with rsi_filter=True."""
+        df = make_ohlcv_oversold(n=100)  # ends deeply oversold
+        cfg_on  = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                                 bb_period=0, rsi_filter=True)
+        cfg_off = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                                 bb_period=0, rsi_filter=False)
+        r_on  = MomentumStrategy(cfg_on).generate_signal("TEST", df)
+        r_off = MomentumStrategy(cfg_off).generate_signal("TEST", df)
+        if r_on.direction == Direction.BUY and r_off.direction == Direction.BUY:
+            # Multiplier must boost the score
+            assert r_on.score >= r_off.score, (
+                f"Expected score_on={r_on.score} >= score_off={r_off.score}"
+            )
+
+    def test_overbought_buy_score_suppressed(self):
+        """BUY score must be lower when RSI > 70 (overbought) with rsi_filter=True."""
+        # Strong uptrend → MA crossover fires BUY but RSI is overbought
+        close_vals = np.linspace(80.0, 140.0, 100)
+        dates = pd.date_range("2024-01-01", periods=100, freq="D", tz="UTC")
+        high = close_vals * 1.005
+        low  = close_vals * 0.995
+        volume = np.full(100, 50_000_000.0)
+        df = pd.DataFrame(
+            {"open": close_vals, "high": high, "low": low,
+             "close": close_vals, "volume": volume, "vwap": close_vals},
+            index=dates,
+        )
+        cfg_on  = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                                 bb_period=0, rsi_filter=True)
+        cfg_off = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                                 bb_period=0, rsi_filter=False)
+        r_on  = MomentumStrategy(cfg_on).generate_signal("TEST", df)
+        r_off = MomentumStrategy(cfg_off).generate_signal("TEST", df)
+        if r_on.direction == Direction.BUY and r_off.direction == Direction.BUY:
+            rsi_val = r_on.features.get("rsi", 50.0)
+            if rsi_val > 70.0:
+                assert r_on.score <= r_off.score, (
+                    f"Expected suppressed score_on={r_on.score} <= score_off={r_off.score}"
+                )
+
+    def test_score_capped_at_one(self):
+        """Boosted score must never exceed 1.0."""
+        df = make_ohlcv_oversold(n=100)
+        cfg = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                             bb_period=0, rsi_filter=True)
+        result = MomentumStrategy(cfg).generate_signal("TEST", df)
+        assert result.score <= 1.0
+
+    def test_series_score_capped_at_one(self):
+        """generate_signals_series scores must never exceed 1.0 with rsi_filter=True."""
+        df = make_ohlcv(300)
+        cfg = MomentumConfig(fast_period=5, slow_period=15, vol_period=10,
+                             bb_period=0, rsi_filter=True)
+        signals = MomentumStrategy(cfg).generate_signals_series("TEST", df)
+        assert (signals["score"] <= 1.0).all(), "Score exceeded 1.0"
+
+    def test_rsi_filter_disabled_does_not_change_non_buy(self):
+        """rsi_filter has no effect on SELL or HOLD scores."""
+        df = make_ohlcv(200, trend=0.002)
+        cfg_on  = MomentumConfig(fast_period=5, slow_period=15, rsi_filter=True)
+        cfg_off = MomentumConfig(fast_period=5, slow_period=15, rsi_filter=False)
+        sig_on  = MomentumStrategy(cfg_on).generate_signals_series("X", df)
+        sig_off = MomentumStrategy(cfg_off).generate_signals_series("X", df)
+        # SELL scores should be identical regardless of rsi_filter
+        sell_on  = sig_on.loc[sig_on["direction"]  == Direction.SELL.value, "score"]
+        sell_off = sig_off.loc[sig_off["direction"] == Direction.SELL.value, "score"]
+        if len(sell_on) > 0 and len(sell_off) > 0:
+            # Both sets should align at same indices
+            common = sell_on.index.intersection(sell_off.index)
+            if len(common) > 0:
+                assert (sell_on[common].round(4) == sell_off[common].round(4)).all()

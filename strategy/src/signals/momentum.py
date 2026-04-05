@@ -90,6 +90,13 @@ class MomentumConfig:
     atr_period: int = 14
     atr_risk_pct: float = 0.01      # fraction of portfolio risked per ATR unit
 
+    # RSI score multiplier filter (applied after direction is determined):
+    #   BUY + RSI < rsi_oversold  → score × 1.5  (boost oversold conviction)
+    #   BUY + RSI > rsi_overbought → score × 0.3  (suppress buying overbought)
+    #   SELL or HOLD → no change
+    # Distinct from the standalone RSI signal: this adjusts existing MA/BB scores.
+    rsi_filter: bool = True
+
 
 @dataclass
 class MomentumFeatures:
@@ -306,6 +313,17 @@ class MomentumStrategy:
             else:
                 rsi_component = max(min((curr_rsi - self.config.rsi_overbought) / (100.0 - self.config.rsi_overbought), 1.0), 0.0) * 0.30
             score = round(min(base + spread_component + rsi_component, 1.0), 4)
+
+        # ── RSI score multiplier ──────────────────────────────────────────────
+        # Boosts conviction when price is genuinely oversold (RSI < threshold),
+        # and suppresses it when a BUY fires into overbought territory.
+        # This is separate from the standalone RSI signal above: it modifies
+        # the score of MA/BB-triggered BUY signals to reflect RSI context.
+        if self.config.rsi_filter and direction == Direction.BUY and score > 0.0:
+            if curr_rsi < self.config.rsi_oversold:
+                score = round(min(score * 1.5, 1.0), 4)
+            elif curr_rsi > self.config.rsi_overbought:
+                score = round(score * 0.3, 4)
 
         # ── ATR computation ───────────────────────────────────────────────────
         # ATR(atr_period) used for adaptive position sizing and stop placement.
@@ -531,6 +549,14 @@ class MomentumStrategy:
         sell_mask = signals["direction"] == Direction.SELL.value
         signals.loc[buy_mask, "score"] = (0.55 + spread_component[buy_mask] + rsi_buy_strength[buy_mask]).clip(0.55, 1.0)
         signals.loc[sell_mask, "score"] = (0.55 + spread_component[sell_mask] + rsi_sell_strength[sell_mask]).clip(0.55, 1.0)
+
+        # ── RSI score multiplier (vectorised) ─────────────────────────────────
+        # BUY into oversold → boost 1.5×; BUY into overbought → suppress 0.3×.
+        if self.config.rsi_filter:
+            oversold_buy  = buy_mask & (signals["rsi"] < self.config.rsi_oversold)
+            overbought_buy = buy_mask & (signals["rsi"] > self.config.rsi_overbought)
+            signals.loc[oversold_buy,  "score"] = (signals.loc[oversold_buy,  "score"] * 1.5).clip(upper=1.0)
+            signals.loc[overbought_buy, "score"] = signals.loc[overbought_buy, "score"] * 0.3
 
         # Drop rows before slow MA is warm
         signals = signals.iloc[self.config.slow_period - 1:]
