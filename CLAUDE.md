@@ -5,12 +5,15 @@
 
 **Phase:** 5 — 90-day paper trading IN PROGRESS (started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-07
+**Last updated:** 2026-04-15 (WSL machine retired — GCP runs autonomously)
 **Tests:** 138/138 passing (46 Rust + 92 Python), Clippy clean
-**GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager LIVE
-**Next milestone:** First live fill today 2026-04-07 20:30 Thai time — monitor via `tail -f /var/log/quantai-first-live-fill.log`
+**GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
+**Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 symbols
+**Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
 
 **Active plugins:** rust-analyzer-lsp, pyright-lsp, context7, code-review
+
+> **Note for new machine setup:** See `docs/handoff.md` for step-by-step onboarding.
 
 ---
 
