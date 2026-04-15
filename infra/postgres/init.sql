@@ -78,9 +78,10 @@ CREATE TABLE IF NOT EXISTS fills (
     strategy_id      VARCHAR(100)   -- Denormalized for faster analytics queries
 );
 
-CREATE INDEX IF NOT EXISTS idx_fills_order    ON fills (client_order_id);
-CREATE INDEX IF NOT EXISTS idx_fills_symbol   ON fills (symbol, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_fills_strategy ON fills (strategy_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_fills_order     ON fills (client_order_id);
+CREATE INDEX IF NOT EXISTS idx_fills_symbol    ON fills (symbol, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_fills_strategy  ON fills (strategy_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_fills_timestamp ON fills (timestamp DESC);
 
 -- ── Positions ─────────────────────────────────────────────────────────────────
 -- Current open positions (one row per symbol).
@@ -147,6 +148,20 @@ CREATE TABLE IF NOT EXISTS daily_pnl (
     num_trades      INTEGER        NOT NULL DEFAULT 0,
     updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
+
+-- ── System Metrics ────────────────────────────────────────────────────────────
+-- Operational health metrics written by scripts/log_system_health.py.
+-- Rows are append-only; queries always take the latest per metric_name.
+CREATE TABLE IF NOT EXISTS system_metrics (
+    metric_id    BIGSERIAL       PRIMARY KEY,
+    metric_name  VARCHAR(50)     NOT NULL,  -- 'pg_connections', 'redis_hit_rate', 'alpaca_latency_ms', etc.
+    metric_value DOUBLE PRECISION NOT NULL,
+    labels       JSONB           NOT NULL DEFAULT '{}',
+    recorded_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_metrics_name_time
+    ON system_metrics (metric_name, recorded_at DESC);
 
 -- ── Seed: initial portfolio value ────────────────────────────────────────────
 -- Insert today's row when the system first starts.

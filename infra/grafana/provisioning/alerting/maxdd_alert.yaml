@@ -1,0 +1,189 @@
+# trading-system/infra/grafana/provisioning/alerting/maxdd_alert.yaml
+#
+# Grafana unified alerting — MaxDD risk monitor.
+# Alert fires when 90-day portfolio drawdown exceeds 8% (hard halt at 15%).
+#
+# To add Slack notifications:
+#   1. Create a Slack incoming webhook URL at https://api.slack.com/apps
+#   2. Replace the placeholder url below with your webhook URL
+#   3. docker compose restart grafana
+#
+# Alerts are always visible in Grafana UI → Alerting → Alert Rules
+# regardless of whether the contact point is configured.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: QuantAI Webhook
+    receivers:
+      - uid: quantai-webhook-v1
+        type: webhook
+        settings:
+          # Replace with Slack incoming webhook URL to enable Slack notifications:
+          # https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+          url: "http://localhost:19999/quantai-alert"
+          httpMethod: POST
+          maxAlerts: 10
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: QuantAI Webhook
+    group_by:
+      - grafana_folder
+      - alertname
+    matchers:
+      - 'team="quantai"'
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 6h
+
+groups:
+  - orgId: 1
+    name: QuantAI Risk Monitoring
+    folder: QuantAI Alerts
+    interval: 5m
+    rules:
+
+      # ── MaxDD > 8% warning (2 consecutive evaluations = 10m) ────────────────
+      - uid: quantai-maxdd-warn-v1
+        title: "MaxDD > 8% Warning"
+        data:
+          - refId: A
+            datasourceUid: quantai_pg
+            relativeTimeRange:
+              from: 7776000
+              to: 0
+            model:
+              datasource:
+                type: postgres
+                uid: quantai_pg
+              rawSql: >
+                WITH vals AS (
+                  SELECT COALESCE(ending_value, starting_value) AS v
+                  FROM daily_pnl
+                  WHERE trading_date >= CURRENT_DATE - 90
+                  ORDER BY trading_date
+                ),
+                running AS (
+                  SELECT v,
+                    MAX(v) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak
+                  FROM vals
+                )
+                SELECT
+                  NOW() AS time,
+                  COALESCE(
+                    ROUND(ABS(MIN((v - peak) / NULLIF(peak, 0) * 100.0))::numeric, 2),
+                    0
+                  )::float8 AS value
+                FROM running
+              format: time_series
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    params:
+                      - 8
+                    type: gt
+              refId: C
+
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        annotations:
+          summary: "MaxDD > 8% — approaching halt threshold"
+          description: >
+            Portfolio maximum drawdown has exceeded 8%.
+            Hard halt triggers at 15%. Review open positions immediately.
+        labels:
+          team: quantai
+          severity: warning
+        isPaused: false
+
+      # ── MaxDD > 13% critical (2% buffer before hard halt) ───────────────────
+      - uid: quantai-maxdd-critical-v1
+        title: "MaxDD > 13% Critical"
+        data:
+          - refId: A
+            datasourceUid: quantai_pg
+            relativeTimeRange:
+              from: 7776000
+              to: 0
+            model:
+              datasource:
+                type: postgres
+                uid: quantai_pg
+              rawSql: >
+                WITH vals AS (
+                  SELECT COALESCE(ending_value, starting_value) AS v
+                  FROM daily_pnl
+                  WHERE trading_date >= CURRENT_DATE - 90
+                  ORDER BY trading_date
+                ),
+                running AS (
+                  SELECT v,
+                    MAX(v) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak
+                  FROM vals
+                )
+                SELECT
+                  NOW() AS time,
+                  COALESCE(
+                    ROUND(ABS(MIN((v - peak) / NULLIF(peak, 0) * 100.0))::numeric, 2),
+                    0
+                  )::float8 AS value
+                FROM running
+              format: time_series
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              settings:
+                mode: dropNN
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    params:
+                      - 13
+                    type: gt
+              refId: C
+
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "MaxDD > 13% CRITICAL — halt imminent"
+          description: >
+            Portfolio maximum drawdown has exceeded 13%.
+            The 15% hard halt will trigger soon. Close positions or adjust risk parameters NOW.
+        labels:
+          team: quantai
+          severity: critical
+        isPaused: false

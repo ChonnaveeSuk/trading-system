@@ -21,6 +21,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 
   # TODO: configure GCS backend for remote state before going live
@@ -259,7 +263,7 @@ resource "google_pubsub_topic_iam_member" "sa_pubsub_publisher" {
 
 resource "google_storage_bucket_iam_member" "sa_gcs_writer" {
   bucket = google_storage_bucket.backups.name
-  role   = "roles/storage.objectCreator"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.quantai.email}"
 }
 

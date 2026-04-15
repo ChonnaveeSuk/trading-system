@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import date, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import psycopg2
@@ -69,6 +69,9 @@ def update(dsn: str = _DSN) -> None:
                     starting_value = Decimal(str(prev[0])) if prev else _STARTING_CAPITAL
 
                 # ── Today's realized P&L from fills ──────────────────────────
+                # Range query so idx_fills_timestamp is used (cast on column blocks index)
+                day_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+                day_next = day_start + timedelta(days=1)
                 cur.execute("""
                     SELECT COALESCE(SUM(
                         CASE WHEN side = 'SELL'
@@ -77,8 +80,8 @@ def update(dsn: str = _DSN) -> None:
                         END
                     ), 0)
                     FROM fills
-                    WHERE timestamp::date = %s
-                """, (today,))
+                    WHERE timestamp >= %s AND timestamp < %s
+                """, (day_start, day_next))
                 realized_pnl = Decimal(str(cur.fetchone()[0]))
 
                 # ── Unrealized P&L from open positions ────────────────────────
@@ -87,7 +90,8 @@ def update(dsn: str = _DSN) -> None:
 
                 # ── Trade count (fills today) ─────────────────────────────────
                 cur.execute(
-                    "SELECT COUNT(*) FROM fills WHERE timestamp::date = %s", (today,)
+                    "SELECT COUNT(*) FROM fills WHERE timestamp >= %s AND timestamp < %s",
+                    (day_start, day_next),
                 )
                 num_trades = cur.fetchone()[0]
 

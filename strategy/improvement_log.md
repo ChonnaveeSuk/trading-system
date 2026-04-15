@@ -2,6 +2,63 @@
 
 ---
 
+## Session 2026-04-06 — Volume Filter (REVERTED)
+
+### Objective
+MaxDD < 8%, Sharpe ≥ 1.61.
+Baseline: Sharpe 1.61, MaxDD 8.86%, avg daily 992 THB/day (trailing_stop=True, 2.0× ATR).
+
+### Hypothesis
+Standalone RSI BUY signals have no volume requirement. Blocking BUYs on severely
+thin-volume days (< 0.5× 10-day avg) should reduce false entries during low-liquidity
+conditions and lower MaxDD.
+
+### Implementation (reverted)
+- `MomentumConfig`: added `volume_filter: bool = True`, `volume_threshold: float = 0.5`
+- `generate_signal()`: computed `volume_floor_ok` flag; gated RSI BUY, BB BUY, MA BUY
+  with the floor (MA/BB already require vol_ratio ≥ 1.0 — net effect is RSI BUY only)
+- `generate_signals_series()`: added `vol_floor` boolean mask; applied to `rsi_buy_filtered`
+- Added `volume_floor_ok` to features dict
+- 13 new tests in `tests/test_volume_filter.py` (all passing before revert)
+
+### Backtest Results (31 symbols, trailing_stop=True, ATR 2.0×)
+
+| Config | Avg daily | MaxDD  | Return | Sharpe |
+|--------|-----------|--------|--------|--------|
+| Baseline (vol_filter=OFF) | 993.86 THB | 8.86%  | +67.61% | 1.6120 |
+| Vol filter ON (0.5×)      | 992.30 THB | 8.87%  | +67.50% | 1.6182 |
+| **Delta**                 | **−1.57 THB/day** | **+0.00%** | **−0.11%** | **+0.0062** |
+
+### Root Cause: No Meaningful Effect
+
+The volume filter at 0.5× threshold has negligible impact on a 31-symbol diversified
+portfolio because:
+1. RSI oversold events (RSI < 30) naturally occur after sustained drops — these are
+   typically accompanied by panic selling and *above-average* volume, not below-average.
+2. Across 31 diversified symbols, very few RSI BUY signals fire on days with
+   vol_ratio < 0.5 (less than half the 10-day average).
+3. The filter blocks ~2 trades across the full 686-day period, neither of which is
+   clearly a false positive.
+
+MaxDD did NOT improve (8.86% → 8.87%). Daily P&L slightly decreased (−1.57 THB/day).
+
+### Decision: REVERT
+
+KEEP condition not met: `MaxDD improves AND Sharpe ≥ 1.55`.  
+MaxDD did not improve (0.01% worse). REVERT condition not triggered (Sharpe > 1.55).  
+Default: REVERT when KEEP conditions are not satisfied.
+
+All implementation and test files removed. Codebase restored to pre-session state.
+
+### Test Count (unchanged)
+| Suite | Count |
+|-------|-------|
+| Rust  | 46    |
+| Python| 92    |
+| **Total** | **138** |
+
+---
+
 ## Session 2026-04-05 (2) — Trailing Stop Loss
 
 ### Objective

@@ -4,8 +4,8 @@
 
 # GCP
 google-cloud-bigquery==3.25.0
-google-cloud-pubsub==2.24.0
-google-cloud-secret-manager==2.20.0
+google-cloud-pubsub==2.25.0
+google-cloud-secret-manager==2.21.0
 google-cloud-storage==2.18.2
 google-auth==2.35.0
 
@@ -29,6 +29,9 @@ protobuf==5.28.3
 # Backtesting
 # vectorbt is optional — heavy dependency, install separately if needed
 # vectorbt==0.26.2
+
+# PostgreSQL driver (used by fetcher.py, update_daily_pnl.py, seed_yfinance.py)
+psycopg2-binary==2.9.10
 
 # Utilities
 python-dateutil==2.9.0

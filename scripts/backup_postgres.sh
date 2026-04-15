@@ -29,11 +29,35 @@ GCS_PREFIX="postgres"
 DATE=$(date -u +%Y-%m-%d)
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-PGHOST="${POSTGRES_HOST:-localhost}"
-PGPORT="${POSTGRES_PORT:-5432}"
-PGDATABASE="${POSTGRES_DB:-quantai}"
-PGUSER="${POSTGRES_USER:-quantai}"
-export PGPASSWORD="${POSTGRES_PASSWORD:-quantai_dev_2026}"
+# Parse DATABASE_URL when set (Cloud Run / Cloud SQL socket format):
+#   postgresql://user:pass@/db?host=/cloudsql/PROJECT:REGION:INSTANCE
+#   postgresql://user:pass@host:port/db
+# Falls back to individual POSTGRES_* env vars for local Docker dev.
+if [[ -n "${DATABASE_URL:-}" ]]; then
+    eval "$(python3 - <<'PYEOF'
+import sys, urllib.parse
+url = urllib.parse.urlparse("${DATABASE_URL}")
+params = dict(urllib.parse.parse_qsl(url.query))
+host = params.get("host") or url.hostname or "localhost"
+port = url.port or 5432
+user = url.username or "quantai"
+password = urllib.parse.unquote(url.password or "")
+db   = url.path.lstrip("/") or "quantai"
+print(f'PGHOST="{host}"')
+print(f'PGPORT="{port}"')
+print(f'PGUSER="{user}"')
+print(f'PGPASSWORD="{password}"')
+print(f'PGDATABASE="{db}"')
+PYEOF
+    )"
+else
+    PGHOST="${POSTGRES_HOST:-localhost}"
+    PGPORT="${POSTGRES_PORT:-5432}"
+    PGDATABASE="${POSTGRES_DB:-quantai}"
+    PGUSER="${POSTGRES_USER:-quantai}"
+    PGPASSWORD="${POSTGRES_PASSWORD:-quantai_dev_2026}"
+fi
+export PGPASSWORD
 
 TMPFILE=$(mktemp /tmp/quantai-backup-XXXXXX.sql.gz)
 

@@ -212,7 +212,7 @@ class YfinanceFetcher:
         """UPSERT rows into the ohlcv table. Existing rows are overwritten."""
         sql = """
             INSERT INTO ohlcv (symbol, timestamp, open, high, low, close, volume, vwap)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             ON CONFLICT (symbol, timestamp) DO UPDATE SET
                 open   = EXCLUDED.open,
                 high   = EXCLUDED.high,
@@ -221,25 +221,26 @@ class YfinanceFetcher:
                 volume = EXCLUDED.volume,
                 vwap   = EXCLUDED.vwap
         """
-        rows = 0
+        values = [
+            (
+                symbol,
+                ts.to_pydatetime(),
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                float(row["volume"]),
+                float(row["vwap"]),
+            )
+            for ts, row in df.iterrows()
+        ]
         conn = None
         try:
             conn = psycopg2.connect(self._dsn)
             with conn:
                 with conn.cursor() as cur:
-                    for ts, row in df.iterrows():
-                        cur.execute(sql, (
-                            symbol,
-                            ts.to_pydatetime(),
-                            float(row["open"]),
-                            float(row["high"]),
-                            float(row["low"]),
-                            float(row["close"]),
-                            float(row["volume"]),
-                            float(row["vwap"]),
-                        ))
-                        rows += 1
+                    psycopg2.extras.execute_values(cur, sql, values, page_size=500)
         finally:
             if conn is not None:
                 conn.close()
-        return rows
+        return len(values)

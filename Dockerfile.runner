@@ -1,0 +1,61 @@
+# trading-system/Dockerfile.runner
+#
+# Docker image for GCP Cloud Run Jobs.
+# Serves two entry points (overridden per job):
+#   - Daily runner:  bash /app/scripts/run_daily.sh
+#   - Backup:        bash /app/scripts/backup_postgres.sh
+#
+# Build:
+#   docker build -f Dockerfile.runner -t quantai-runner .
+#
+# Push to Artifact Registry:
+#   docker tag quantai-runner asia-southeast1-docker.pkg.dev/quantai-trading-paper/quantai/runner:latest
+#   docker push asia-southeast1-docker.pkg.dev/quantai-trading-paper/quantai/runner:latest
+
+# ── Base: Debian-slim + Python 3.11 ───────────────────────────────────────────
+FROM python:3.11-slim
+
+# ── System deps: gcloud CLI (for gsutil), PostgreSQL client (for pg_dump) ─────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        postgresql-client \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
+       https://packages.cloud.google.com/apt cloud-sdk main" \
+       | tee /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+       | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        google-cloud-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python dependencies ────────────────────────────────────────────────────────
+WORKDIR /app
+COPY strategy/requirements.txt /app/strategy/requirements.txt
+
+RUN pip install --no-cache-dir -r /app/strategy/requirements.txt
+
+# ── Application source ─────────────────────────────────────────────────────────
+COPY strategy/src/          /app/strategy/src/
+COPY strategy/run_strategy.py /app/strategy/run_strategy.py
+COPY scripts/               /app/scripts/
+
+# Ensure scripts are executable
+RUN chmod +x /app/scripts/*.sh 2>/dev/null || true
+
+# ── Runtime environment ────────────────────────────────────────────────────────
+# These are defaults; Cloud Run Job env vars / Secret Manager override them.
+ENV TRADING_MODE=paper
+ENV GCP_PROJECT_ID=quantai-trading-paper
+ENV PYTHONPATH=/app
+
+# Cloud Run Jobs authenticate via the attached service account automatically.
+# gsutil/gcloud use ADC without any gcloud auth command.
+# psql / pg_dump use DATABASE_URL or POSTGRES_* vars (set via Secret Manager).
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+# Default: daily runner. Backup job overrides CMD in the Cloud Run Job spec.
+CMD ["bash", "/app/scripts/run_daily.sh"]

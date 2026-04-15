@@ -4,7 +4,7 @@
 # Daily paper trading loop — runs once per trading day.
 #
 # Steps:
-#   1. Fetch latest OHLCV from yfinance (last 5 days, catches missed days)
+#   1. Fetch latest OHLCV — Alpaca if ALPACA_FETCHER=1 (Cloud Run), else yfinance (local)
 #   2. Run strategy: backtest walk-forward + live signal → Rust OMS
 #      If Rust engine is not running, falls back to backtest-only (no error)
 #   3. Update daily_pnl table with today's P&L and trade count
@@ -33,9 +33,23 @@ log "═════════════════════════
 log " QuantAI daily run — ${TIMESTAMP}"
 log "═══════════════════════════════════════════════════════"
 
-# ── Step 1: Fetch latest OHLCV ────────────────────────────────────────────────
-log "Step 1/4: Fetching latest OHLCV from yfinance (last 5 days)…"
-python3 "${SCRIPT_DIR}/seed_yfinance.py" --days 5
+# ── Step 0: System health snapshot (pre-run) ──────────────────────────────────
+log "Step 0: Logging system health snapshot (pre-run)…"
+python3 "${SCRIPT_DIR}/log_system_health.py" --skip-alpaca || true
+log "Step 0: Health snapshot done."
+
+# ── Step 1: Fetch latest OHLCV + refresh planner stats ────────────────────────
+# ALPACA_FETCHER=1  → use Alpaca Markets Data API (required on Cloud Run — Yahoo Finance blocks GCP IPs)
+# ALPACA_FETCHER=0  → use yfinance (default for local WSL dev)
+if [[ "${ALPACA_FETCHER:-0}" == "1" ]]; then
+    log "Step 1/4: Fetching latest OHLCV from Alpaca Markets (last 7 days)…"
+    python3 "${SCRIPT_DIR}/seed_alpaca.py" --days 7
+else
+    log "Step 1/4: Fetching latest OHLCV from yfinance (last 5 days)…"
+    python3 "${SCRIPT_DIR}/seed_yfinance.py" --days 5
+fi
+PGPASSWORD=quantai_dev_2026 psql -h localhost -U quantai -d quantai -q \
+    -c "ANALYZE ohlcv;" 2>/dev/null || true
 log "Step 1/4: OHLCV fetch complete."
 
 # ── Step 2: Run strategy ──────────────────────────────────────────────────────
@@ -62,6 +76,11 @@ log "Step 3/4: daily_pnl updated."
 log "Step 4/4: Running PostgreSQL backup to GCS…"
 bash "${SCRIPT_DIR}/backup_postgres.sh"
 log "Step 4/4: Backup complete."
+
+# ── Step 5: System health snapshot (post-run) + cron marker ──────────────────
+log "Step 5/5: Logging system health snapshot (post-run) and cron marker…"
+python3 "${SCRIPT_DIR}/log_system_health.py" || true
+log "Step 5/5: Health + cron marker done."
 
 log "═══════════════════════════════════════════════════════"
 log " Daily run complete."

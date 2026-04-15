@@ -1,0 +1,94 @@
+# .github/workflows/deploy.yml
+#
+# Build + push Docker image to Artifact Registry, then update Cloud Run Jobs.
+# Triggers on push to main branch.
+#
+# Prerequisites (one-time setup):
+#   1. Run `terraform apply -var-file=paper.tfvars` to create WIF pool + provider
+#   2. Get provider name:
+#        terraform output workload_identity_provider
+#   3. Add GitHub Actions secrets:
+#        GCP_PROJECT_ID        = quantai-trading-paper
+#        GCP_WIF_PROVIDER      = projects/NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+#        GCP_SA_EMAIL          = quantai-trading@quantai-trading-paper.iam.gserviceaccount.com
+#        REGISTRY_URL          = asia-southeast1-docker.pkg.dev/quantai-trading-paper/quantai
+
+name: Deploy Cloud Run Jobs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Only rebuild when strategy/scripts/Dockerfile change
+      - 'strategy/**'
+      - 'scripts/**'
+      - 'Dockerfile.runner'
+
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+env:
+  REGION: asia-southeast1
+  IMAGE_NAME: runner
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Auth to GCP via Workload Identity Federation (no stored keys) ─────────
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # ── Build & push Docker image ─────────────────────────────────────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --file Dockerfile.runner \
+            --tag "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest" \
+            --tag "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest"
+          docker push "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      # ── Update Cloud Run Jobs with the new image ───────────────────────────────
+      - name: Update daily-runner job image
+        run: |
+          gcloud run jobs update quantai-daily-runner \
+            --image "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Update backup job image
+        run: |
+          gcloud run jobs update quantai-backup \
+            --image "${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Log deployment
+        run: |
+          echo "Deployed image: ${{ secrets.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Jobs updated: quantai-daily-runner, quantai-backup"

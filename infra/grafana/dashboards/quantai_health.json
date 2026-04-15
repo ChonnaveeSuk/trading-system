@@ -1,0 +1,360 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "datasource", "id": "postgres", "name": "PostgreSQL", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    { "title": "Trading Overview",    "url": "/d/quantai-trading-v1",  "type": "link", "icon": "home",       "targetBlank": false },
+    { "title": "Strategy Performance","url": "/d/quantai-strategy-v1", "type": "link", "icon": "chart-line", "targetBlank": false }
+  ],
+  "panels": [
+
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Database Health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+
+    {
+      "id": 201,
+      "type": "gauge",
+      "title": "PG Active Connections",
+      "description": "Active backend connections to the quantai database right now. Warning > 8 (pool limit is 10).",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE((SELECT metric_value FROM system_metrics WHERE metric_name='pg_connections' ORDER BY recorded_at DESC LIMIT 1), (SELECT COUNT(*)::float8 FROM pg_stat_activity WHERE datname='quantai' AND state='active'))",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 10,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 6    },
+              { "color": "red",    "value": 9    }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 202,
+      "type": "gauge",
+      "title": "Redis Hit Rate",
+      "description": "Redis keyspace hit rate % logged by scripts/log_system_health.py. Populated after first cron run.",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE((SELECT metric_value FROM system_metrics WHERE metric_name='redis_hit_rate' ORDER BY recorded_at DESC LIMIT 1), 0)::float8 AS \"Redis Hit Rate %\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 50   },
+              { "color": "green",  "value": 80   }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 203,
+      "type": "stat",
+      "title": "Last Cron Run",
+      "description": "Timestamp of last completed run_daily.sh execution. Stale > 26h means missed daily job.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT recorded_at AS \"Last Run\" FROM system_metrics WHERE metric_name='cron_last_run' ORDER BY recorded_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsLocal",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+
+    {
+      "id": 204,
+      "type": "stat",
+      "title": "Redis Key Count",
+      "description": "Total keys currently in Redis (tick cache and order state).",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 5 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE((SELECT metric_value FROM system_metrics WHERE metric_name='redis_key_count' ORDER BY recorded_at DESC LIMIT 1), 0)::float8 AS \"Keys\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+        }
+      }
+    },
+
+    {
+      "id": 205,
+      "type": "table",
+      "title": "Table Row Counts",
+      "description": "Row counts for all hot tables. Helps detect stale data or runaway inserts.",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT 'ohlcv'          AS \"Table\", COUNT(*)::int AS \"Rows\" FROM ohlcv UNION ALL SELECT 'fills',    COUNT(*) FROM fills UNION ALL SELECT 'orders',   COUNT(*) FROM orders UNION ALL SELECT 'positions', COUNT(*) FROM positions UNION ALL SELECT 'signals',  COUNT(*) FROM signals UNION ALL SELECT 'risk_events', COUNT(*) FROM risk_events UNION ALL SELECT 'daily_pnl', COUNT(*) FROM daily_pnl UNION ALL SELECT 'system_metrics', COUNT(*) FROM system_metrics ORDER BY 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } }
+      }
+    },
+
+    {
+      "id": 210,
+      "type": "row",
+      "title": "API Latency & Cache",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false
+    },
+
+    {
+      "id": 211,
+      "type": "timeseries",
+      "title": "Alpaca API Latency (ms)",
+      "description": "GET /account round-trip time logged by scripts/log_system_health.py. Spike > 2000ms indicates connectivity issues.",
+      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT recorded_at AS time, metric_value AS \"Latency (ms)\" FROM system_metrics WHERE metric_name='alpaca_latency_ms' ORDER BY recorded_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null  },
+              { "color": "yellow", "value": 1000  },
+              { "color": "red",    "value": 3000  }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 212,
+      "type": "stat",
+      "title": "Last Alpaca Latency",
+      "description": "Most recent Alpaca API round-trip time. Expected < 500ms.",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE((SELECT metric_value FROM system_metrics WHERE metric_name='alpaca_latency_ms' ORDER BY recorded_at DESC LIMIT 1), -1)::float8 AS \"Latency (ms)\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null  },
+              { "color": "yellow", "value": 1000  },
+              { "color": "red",    "value": 3000  }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 213,
+      "type": "timeseries",
+      "title": "PG Connection History",
+      "description": "PostgreSQL active connection count over time from system_metrics.",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 14 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT recorded_at AS time, metric_value AS \"PG Connections\" FROM system_metrics WHERE metric_name='pg_connections' ORDER BY recorded_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 1, "fillOpacity": 30 },
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      }
+    },
+
+    {
+      "id": 220,
+      "type": "row",
+      "title": "Container Health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "collapsed": false
+    },
+
+    {
+      "id": 221,
+      "type": "table",
+      "title": "Docker Container Status",
+      "description": "Container health from scripts/log_system_health.py. metric_value: 1=healthy, 0=unhealthy/stopped.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT DISTINCT ON (labels->>'container') labels->>'container' AS \"Container\", CASE WHEN metric_value = 1 THEN 'healthy' ELSE 'unhealthy' END AS \"Status\", recorded_at AS \"Last Check\" FROM system_metrics WHERE metric_name='docker_health' ORDER BY labels->>'container', recorded_at DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Status" }, "properties": [
+            { "id": "custom.displayMode", "value": "color-background" },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "healthy":   { "color": "green",  "index": 0 } } },
+              { "type": "value", "options": { "unhealthy": { "color": "red",    "index": 1 } } }
+            ]}
+          ]}
+        ]
+      }
+    },
+
+    {
+      "id": 222,
+      "type": "timeseries",
+      "title": "Container Health Timeline",
+      "description": "1 = healthy, 0 = unhealthy/stopped. Gaps indicate the health logger was not running.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT recorded_at AS time, metric_value AS \"Healthy\", labels->>'container' AS \"Container\" FROM system_metrics WHERE metric_name='docker_health' ORDER BY recorded_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60 },
+          "min": 0,
+          "max": 1
+        }
+      }
+    }
+
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["quantai", "system", "health"],
+  "time": { "from": "now-7d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "QuantAI System Health",
+  "uid": "quantai-health-v1",
+  "version": 1
+}

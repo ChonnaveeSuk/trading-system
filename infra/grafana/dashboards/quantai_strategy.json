@@ -1,0 +1,349 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "datasource", "id": "postgres", "name": "PostgreSQL", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    { "title": "Trading Overview", "url": "/d/quantai-trading-v1",  "type": "link", "icon": "home",       "targetBlank": false },
+    { "title": "System Health",    "url": "/d/quantai-health-v1",   "type": "link", "icon": "heart",      "targetBlank": false }
+  ],
+  "panels": [
+
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Performance Metrics",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "Rolling 30-Day Sharpe Ratio",
+      "description": "Annualised Sharpe over a 30-day rolling window of daily portfolio returns. Gate: > 1.0.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH port AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v FROM daily_pnl ORDER BY trading_date), rets AS (SELECT trading_date, (v - LAG(v) OVER (ORDER BY trading_date)) / NULLIF(LAG(v) OVER (ORDER BY trading_date), 0) AS r FROM port) SELECT trading_date AS time, ROUND((SQRT(252) * AVG(r) OVER (ORDER BY trading_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) / NULLIF(STDDEV(r) OVER (ORDER BY trading_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW), 0))::numeric, 2)::float8 AS \"Sharpe (30d)\" FROM rets WHERE r IS NOT NULL ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 0.5  },
+              { "color": "green",  "value": 1.0  }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 102,
+      "type": "barchart",
+      "title": "P&L by Symbol — Top 10 (THB)",
+      "description": "Cumulative realized P&L per symbol, converted to THB. Green = profitable, red = losing.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT symbol AS \"Symbol\", ROUND((realized_pnl * 35.7)::numeric, 0)::float8 AS \"P&L (THB)\" FROM positions WHERE realized_pnl <> 0 ORDER BY realized_pnl DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "xField": "Symbol",
+        "orientation": "horizontal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",   "value": null },
+              { "color": "green", "value": 0    }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 110,
+      "type": "row",
+      "title": "Signal Analysis",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": false
+    },
+
+    {
+      "id": 111,
+      "type": "barchart",
+      "title": "Signal Score Distribution",
+      "description": "Histogram of BUY/SELL signal scores (0.55–1.0). Shows how often high-confidence signals fire.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 11 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT CASE WHEN score >= 0.95 THEN '0.95-1.00' WHEN score >= 0.90 THEN '0.90-0.95' WHEN score >= 0.85 THEN '0.85-0.90' WHEN score >= 0.80 THEN '0.80-0.85' WHEN score >= 0.75 THEN '0.75-0.80' WHEN score >= 0.70 THEN '0.70-0.75' WHEN score >= 0.65 THEN '0.65-0.70' WHEN score >= 0.60 THEN '0.60-0.65' WHEN score >= 0.55 THEN '0.55-0.60' ELSE '<0.55' END AS \"Score Bucket\", COUNT(*)::int AS \"Count\" FROM signals WHERE direction IN ('BUY','SELL') GROUP BY 1 ORDER BY 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "xField": "Score Bucket",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "barWidth": 0.97,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      }
+    },
+
+    {
+      "id": 112,
+      "type": "barchart",
+      "title": "RSI at Entry — Signal Distribution",
+      "description": "RSI value when signal was generated (from signals.features->>'rsi'). Confirms mean-reversion filter is working: BUY signals should cluster below 30, SELL above 70.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 11 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT CASE WHEN (features->>'rsi')::float < 20 THEN '0–20 Oversold' WHEN (features->>'rsi')::float < 30 THEN '20–30 Oversold' WHEN (features->>'rsi')::float < 40 THEN '30–40' WHEN (features->>'rsi')::float < 50 THEN '40–50 Neutral' WHEN (features->>'rsi')::float < 60 THEN '50–60 Neutral' WHEN (features->>'rsi')::float < 70 THEN '60–70' WHEN (features->>'rsi')::float < 80 THEN '70–80 Overbought' ELSE '80–100 Overbought' END AS \"RSI Bucket\", COUNT(*)::int AS \"Signals\", ROUND(AVG(score)::numeric, 3)::float8 AS \"Avg Score\" FROM signals WHERE direction IN ('BUY','SELL') AND features->>'rsi' IS NOT NULL GROUP BY 1 ORDER BY MIN((features->>'rsi')::float)",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "xField": "RSI Bucket",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+
+    {
+      "id": 120,
+      "type": "row",
+      "title": "Trade Analysis",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "collapsed": false
+    },
+
+    {
+      "id": 121,
+      "type": "barchart",
+      "title": "Trade Duration Distribution",
+      "description": "Time from BUY fill to matching SELL fill for the same symbol. Shows average holding period.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH buys AS (SELECT symbol, timestamp AS buy_time, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp) AS rn FROM fills WHERE side='BUY'), sells AS (SELECT symbol, timestamp AS sell_time, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp) AS rn FROM fills WHERE side='SELL'), pairs AS (SELECT b.symbol, EXTRACT(EPOCH FROM (s.sell_time - b.buy_time)) / 86400.0 AS duration_days FROM buys b JOIN sells s ON b.symbol=s.symbol AND b.rn=s.rn WHERE s.sell_time > b.buy_time) SELECT CASE WHEN duration_days < 1 THEN '< 1 day' WHEN duration_days < 3 THEN '1–3 days' WHEN duration_days < 7 THEN '3–7 days' WHEN duration_days < 14 THEN '7–14 days' WHEN duration_days < 30 THEN '14–30 days' ELSE '> 30 days' END AS \"Duration\", COUNT(*)::int AS \"Trades\" FROM pairs GROUP BY 1 ORDER BY MIN(duration_days)",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "xField": "Duration",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" }
+        }
+      }
+    },
+
+    {
+      "id": 122,
+      "type": "barchart",
+      "title": "Win Rate by Symbol",
+      "description": "Profitable round-trips ÷ total round-trips per symbol. Identifies which symbols the strategy trades well.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "WITH buys AS (SELECT symbol, fill_price AS buy_price, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp) AS rn FROM fills WHERE side='BUY'), sells AS (SELECT symbol, fill_price AS sell_price, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp) AS rn FROM fills WHERE side='SELL'), pairs AS (SELECT b.symbol, CASE WHEN s.sell_price > b.buy_price THEN 1 ELSE 0 END AS win FROM buys b JOIN sells s ON b.symbol=s.symbol AND b.rn=s.rn) SELECT symbol AS \"Symbol\", ROUND(100.0 * SUM(win) / NULLIF(COUNT(*), 0), 1)::float8 AS \"Win Rate %\" FROM pairs GROUP BY symbol HAVING COUNT(*) > 0 ORDER BY 2 DESC LIMIT 15",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "xField": "Symbol",
+        "orientation": "horizontal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 40   },
+              { "color": "green",  "value": 55   }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 130,
+      "type": "row",
+      "title": "Signal Quality",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "collapsed": false
+    },
+
+    {
+      "id": 131,
+      "type": "timeseries",
+      "title": "Signal Score over Time",
+      "description": "Rolling average signal score (BUY/SELL) by day. Declining scores may indicate degrading market conditions.",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 31 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT date_trunc('day', created_at) AS time, ROUND(AVG(score)::numeric, 3)::float8 AS \"Avg Score\", ROUND(MAX(score)::numeric, 3)::float8 AS \"Max Score\", ROUND(MIN(score)::numeric, 3)::float8 AS \"Min Score\" FROM signals WHERE direction IN ('BUY','SELL') GROUP BY 1 ORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "custom": { "lineWidth": 2 },
+          "min": 0.5,
+          "max": 1.0
+        }
+      }
+    },
+
+    {
+      "id": 132,
+      "type": "stat",
+      "title": "Signal Act Rate",
+      "description": "% of BUY/SELL signals that led to an order (acted_on=true). Low rate indicates risk engine is rejecting many signals.",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 31 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE acted_on) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS \"Act Rate %\" FROM signals WHERE direction IN ('BUY','SELL')",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 20   },
+              { "color": "green",  "value": 50   }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 133,
+      "type": "table",
+      "title": "Top Reject Reasons",
+      "description": "Risk engine rejection reasons from signals.reject_reason. Identifies which risk rules fire most often.",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 35 },
+      "datasource": { "type": "postgres", "uid": "quantai_pg" },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE(reject_reason, 'N/A') AS \"Reason\", COUNT(*)::int AS \"Count\" FROM signals WHERE direction IN ('BUY','SELL') AND acted_on = false GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto" } }
+      }
+    }
+
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["quantai", "paper-trading", "strategy"],
+  "time": { "from": "now-90d", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "QuantAI Strategy Performance",
+  "uid": "quantai-strategy-v1",
+  "version": 1
+}
