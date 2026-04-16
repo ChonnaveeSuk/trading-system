@@ -159,6 +159,17 @@ resource "google_cloud_run_v2_job" "daily_runner" {
           name  = "ALPACA_FETCHER"
           value = "1"
         }
+        env {
+          # Direct Alpaca REST for order submission — Rust OMS cannot run on Cloud Run
+          # (no Redis available; Rust main.rs also uses PaperBroker not AlpacaBroker)
+          name  = "ALPACA_DIRECT"
+          value = "1"
+        }
+        env {
+          # Start Cloud SQL before job, stop after — saves ~$7.55/month (~70% of SQL cost)
+          name  = "MANAGE_CLOUD_SQL"
+          value = "1"
+        }
 
         # DATABASE_URL from Secret Manager (Cloud SQL Unix-socket format)
         env {
@@ -236,6 +247,11 @@ resource "google_cloud_run_v2_job" "backup" {
         env {
           name  = "GCS_BACKUP_BUCKET"
           value = "quantai-backups-${var.project_id}"
+        }
+        env {
+          # Start Cloud SQL before backup, stop after — saves ~$7.55/month
+          name  = "MANAGE_CLOUD_SQL"
+          value = "1"
         }
 
         env {
@@ -398,5 +414,13 @@ resource "google_project_iam_member" "sa_ar_admin" {
 resource "google_project_iam_member" "sa_run_developer" {
   project = var.project_id
   role    = "roles/run.developer"
+  member  = "serviceAccount:${google_service_account.quantai.email}"
+}
+
+# Allow Cloud Run Jobs to start/stop Cloud SQL (for cost optimization)
+# Needed by MANAGE_CLOUD_SQL=1 — scripts call gcloud sql instances patch
+resource "google_project_iam_member" "sa_cloudsql_admin" {
+  project = var.project_id
+  role    = "roles/cloudsql.admin"
   member  = "serviceAccount:${google_service_account.quantai.email}"
 }

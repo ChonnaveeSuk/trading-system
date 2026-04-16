@@ -35,6 +35,10 @@ from src.backtester import BacktestConfig
 from src.bridge.client import TradingBridgeClient
 from src.signals import Direction
 
+# When ALPACA_DIRECT=1, live signals go straight to Alpaca REST (no Rust gRPC needed).
+# This is the Cloud Run path — Rust OMS cannot run there (no Redis, PaperBroker only).
+_ALPACA_DIRECT = os.environ.get("ALPACA_DIRECT", "0") == "1"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -122,32 +126,54 @@ def _print_walkforward(wf) -> None:
 
 
 def run_live(symbols: list[str]) -> None:
-    """Generate live signal and send to Rust OMS via gRPC."""
-    print("\n" + "=" * 70)
-    print(" PHASE 2 — LIVE SIGNAL → RUST OMS (gRPC)")
-    print("=" * 70)
+    """Generate live signals and submit orders.
 
+    Two paths:
+      ALPACA_DIRECT=1 → AlpacaDirectClient (Cloud Run / no Rust needed)
+      default         → TradingBridgeClient (gRPC to local Rust OMS)
+    """
     strategy = MomentumStrategy(MomentumConfig(fast_period=5, slow_period=15, vol_period=10, bb_period=0))
 
-    try:
-        client = TradingBridgeClient(host=GRPC_HOST, port=GRPC_PORT, timeout=5.0)
-        client.connect()
+    if _ALPACA_DIRECT:
+        print("\n" + "=" * 70)
+        print(" LIVE SIGNAL → ALPACA DIRECT (REST)")
+        print("=" * 70)
+        try:
+            from src.bridge.alpaca_direct import AlpacaDirectClient
+            client = AlpacaDirectClient()
+            client.connect()
+        except Exception as e:
+            print(f"\n  AlpacaDirectClient init failed: {e}")
+            return
+    else:
+        print("\n" + "=" * 70)
+        print(" PHASE 2 — LIVE SIGNAL → RUST OMS (gRPC)")
+        print("=" * 70)
+        try:
+            client = TradingBridgeClient(host=GRPC_HOST, port=GRPC_PORT, timeout=5.0)
+            client.connect()
+        except Exception as e:
+            print(f"\n  Cannot connect to Rust OMS at {GRPC_HOST}:{GRPC_PORT}")
+            print(f"  Error: {e}")
+            print("  Start the Rust engine first: cd core && cargo run")
+            print("  (or run with --mode backtest to skip gRPC)")
+            return
 
-        # Health check first
+    # Health check — works for both clients
+    try:
         health = client.health_check()
         print(f"\n  Engine health: {health}")
         if not health.healthy:
             print("  Engine unhealthy — aborting.")
+            client.disconnect()
             return
         if not health.paper_mode:
             print("  SAFETY: engine not in paper mode — aborting.")
+            client.disconnect()
             return
-
     except Exception as e:
-        print(f"\n  Cannot connect to Rust OMS at {GRPC_HOST}:{GRPC_PORT}")
-        print(f"  Error: {e}")
-        print("  Start the Rust engine first: cd core && cargo run")
-        print("  (or run with --mode backtest to skip gRPC)")
+        print(f"\n  Health check failed: {e}")
+        client.disconnect()
         return
 
     print()

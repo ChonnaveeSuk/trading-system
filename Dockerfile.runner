@@ -51,6 +51,10 @@ RUN chmod +x /app/scripts/*.sh 2>/dev/null || true
 ENV TRADING_MODE=paper
 ENV GCP_PROJECT_ID=quantai-trading-paper
 ENV PYTHONPATH=/app
+# Direct Alpaca REST — bypasses Rust gRPC (Cloud Run has no Redis for Rust)
+ENV ALPACA_DIRECT=1
+# Use Alpaca data API — Yahoo Finance blocks GCP IP ranges
+ENV ALPACA_FETCHER=1
 
 # Cloud Run Jobs authenticate via the attached service account automatically.
 # gsutil/gcloud use ADC without any gcloud auth command.
