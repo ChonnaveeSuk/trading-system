@@ -97,6 +97,23 @@ class MomentumConfig:
     # Distinct from the standalone RSI signal: this adjusts existing MA/BB scores.
     rsi_filter: bool = True
 
+    # Market regime filter — suppress BUY signals in bear markets.
+    #
+    # Regime is detected from a proxy symbol (default: SPY) using a long-period MA:
+    #   BULL:    price > MA(regime_ma_period) × (1 + regime_neutral_pct)   → BUY allowed
+    #   NEUTRAL: price within ±regime_neutral_pct of MA                    → BUY score × 0.7
+    #   BEAR:    price < MA(regime_ma_period) × (1 - regime_neutral_pct)   → BUY blocked
+    #
+    # SELL signals always pass regardless of regime (take profit / exit).
+    # When SPY data is unavailable, defaults to BULL (no blocking).
+    #
+    # Live path: call strategy.update_regime(spy_df) before the symbol loop.
+    # Backtest path: pass regime_df=spy_df to BacktestEngine.run()/walk_forward().
+    regime_filter: bool = True
+    regime_symbol: str = "SPY"        # Proxy for market regime (metadata only)
+    regime_ma_period: int = 200       # MA period for regime detection (200 = classic)
+    regime_neutral_pct: float = 0.02  # ±2% band around MA200 treated as NEUTRAL
+
 
 @dataclass
 class MomentumFeatures:
@@ -113,18 +130,100 @@ class MomentumFeatures:
 
 
 class MomentumStrategy:
-    """Dual MA crossover with volume confirmation.
+    """Dual MA crossover with volume confirmation + market regime filter.
 
     Usage::
 
         strategy = MomentumStrategy()
+        # Live: set regime once from SPY before the symbol loop
+        strategy.update_regime(spy_df)      # caches BULL/BEAR/NEUTRAL
         df = fetcher.fetch("AAPL", days=30)
         result = strategy.generate_signal("AAPL", df, portfolio_value=100_000)
         # result: SignalResult with direction, score, stop_loss, features
+
+        # Backtest: pass SPY data for bar-by-bar regime filtering
+        engine.walk_forward("AAPL", df, strategy, regime_df=spy_df)
     """
 
     def __init__(self, config: MomentumConfig = MomentumConfig()) -> None:
         self.config = config
+        # Cached market regime (updated by update_regime(); default BULL = permissive)
+        self._regime: str = "BULL"
+        self._spy_price: Optional[float] = None
+        self._spy_ma200: Optional[float] = None
+
+    # ── Market regime ─────────────────────────────────────────────────────────
+
+    def update_regime(self, spy_df: pd.DataFrame) -> str:
+        """Compute and cache the current market regime from SPY (or proxy) data.
+
+        Call this once before the symbol loop in the live path.  The cached
+        regime is then used by every subsequent generate_signal() call.
+
+        Regime logic (SPY price vs MA(regime_ma_period)):
+          BULL:    price > MA × (1 + regime_neutral_pct)
+          NEUTRAL: price within ±regime_neutral_pct of MA
+          BEAR:    price < MA × (1 - regime_neutral_pct)
+
+        Args:
+            spy_df: OHLCV DataFrame for the proxy symbol (SPY).
+                    Needs ≥ regime_ma_period bars; falls back to BULL if short.
+
+        Returns:
+            Regime string: "BULL", "NEUTRAL", or "BEAR".
+        """
+        if not self.config.regime_filter:
+            return "BULL"  # filter disabled — no-op
+
+        period = self.config.regime_ma_period
+        if spy_df.empty or len(spy_df) < period:
+            logger.warning(
+                "Insufficient SPY data for regime detection "
+                "(%d bars, need %d) — defaulting to BULL.",
+                len(spy_df) if not spy_df.empty else 0,
+                period,
+            )
+            self._regime = "BULL"
+            return "BULL"
+
+        spy_close = spy_df["close"]
+        ma_val = float(spy_close.rolling(period).mean().iloc[-1])
+        spy_price = float(spy_close.iloc[-1])
+
+        if np.isnan(ma_val) or ma_val == 0:
+            self._regime = "BULL"
+            return "BULL"
+
+        ratio = (spy_price - ma_val) / ma_val
+        neutral_pct = self.config.regime_neutral_pct
+
+        if ratio > neutral_pct:
+            regime = "BULL"
+        elif ratio < -neutral_pct:
+            regime = "BEAR"
+        else:
+            regime = "NEUTRAL"
+
+        prev_regime = self._regime
+        self._regime = regime
+        self._spy_price = spy_price
+        self._spy_ma200 = ma_val
+
+        logger.info(
+            "Market regime: %s  SPY=%.2f  MA%d=%.2f  delta=%.2f%%",
+            regime, spy_price, period, ma_val, ratio * 100,
+        )
+        if prev_regime != regime:
+            logger.warning(
+                "REGIME CHANGE: %s → %s  (SPY %.2f vs MA%d %.2f)",
+                prev_regime, regime, spy_price, period, ma_val,
+            )
+        return regime
+
+    @property
+    def current_regime(self) -> str:
+        """Return the cached market regime ('BULL', 'NEUTRAL', or 'BEAR')."""
+        return self._regime
 
     def generate_signal(
         self,
@@ -325,6 +424,21 @@ class MomentumStrategy:
             elif curr_rsi > self.config.rsi_overbought:
                 score = round(score * 0.3, 4)
 
+        # ── Market regime filter ──────────────────────────────────────────────
+        # BEAR:    suppress ALL BUY signals → direction=HOLD, score=0
+        # NEUTRAL: allow BUY with reduced conviction (score × 0.7)
+        # SELL signals always pass regardless of regime (exit / take profit).
+        # SPY data must be pre-loaded via update_regime() before calling this.
+        if self.config.regime_filter and direction == Direction.BUY:
+            if self._regime == "BEAR":
+                direction = Direction.HOLD
+                score = 0.0
+            elif self._regime == "NEUTRAL":
+                score = round(score * 0.7, 4)
+                if score < 0.55:
+                    direction = Direction.HOLD
+                    score = 0.0
+
         # ── ATR computation ───────────────────────────────────────────────────
         # ATR(atr_period) used for adaptive position sizing and stop placement.
         # Falls back to fixed position_pct sizing when atr_period=0 or ATR is NaN.
@@ -418,6 +532,9 @@ class MomentumStrategy:
             "production_ready": production_ready,
             "volume_confirmed": volume_confirmed,
             "noise_filter_bps": self.config.noise_filter_bps,
+            "regime": self._regime if self.config.regime_filter else "DISABLED",
+            "regime_spy_price": round(self._spy_price, 4) if self._spy_price is not None else None,
+            "regime_spy_ma200": round(self._spy_ma200, 4) if self._spy_ma200 is not None else None,
         }
 
         return SignalResult(
@@ -434,6 +551,7 @@ class MomentumStrategy:
         self,
         symbol: str,
         df: pd.DataFrame,
+        regime_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Generate signal for every bar in `df` (used by the backtester).
 
@@ -560,4 +678,70 @@ class MomentumStrategy:
 
         # Drop rows before slow MA is warm
         signals = signals.iloc[self.config.slow_period - 1:]
+
+        # ── Market regime filter (vectorised) ─────────────────────────────────
+        # Applies bar-by-bar regime derived from regime_df (SPY OHLCV).
+        # Falls back to the cached self._regime when regime_df is None.
+        # BEAR:    BUY → HOLD  (score=0)
+        # NEUTRAL: BUY score × 0.7; if score drops below 0.55 → HOLD
+        # SELL always passes — take profit regardless of regime.
+        signals["regime"] = self._regime  # default: cached (from update_regime)
+
+        if self.config.regime_filter:
+            if regime_df is not None and not regime_df.empty:
+                # Compute bar-by-bar SPY ratio vs MA200
+                spy_close = regime_df["close"]
+                spy_ma = spy_close.rolling(
+                    self.config.regime_ma_period,
+                    min_periods=self.config.regime_ma_period,
+                ).mean()
+                valid = spy_ma > 0
+                spy_ratio = (spy_close - spy_ma).where(valid) / spy_ma.where(valid)
+
+                # Align to signals index (forward-fill gaps; NaN = insufficient history)
+                ratio_s = spy_ratio.reindex(signals.index, method="ffill")
+                neutral_pct = self.config.regime_neutral_pct
+                has_data = ~ratio_s.isna()
+
+                is_bear    = has_data & (ratio_s < -neutral_pct)
+                is_neutral = has_data & (ratio_s >= -neutral_pct) & (ratio_s <= neutral_pct)
+
+                # Label regime column
+                signals.loc[is_bear,    "regime"] = "BEAR"
+                signals.loc[is_neutral, "regime"] = "NEUTRAL"
+                signals.loc[has_data & ~is_bear & ~is_neutral, "regime"] = "BULL"
+
+                buy_mask = signals["direction"] == Direction.BUY.value
+
+                # BEAR: suppress all BUY signals
+                bear_buy = buy_mask & is_bear
+                signals.loc[bear_buy, "direction"] = Direction.HOLD.value
+                signals.loc[bear_buy, "score"] = 0.0
+
+                # NEUTRAL: reduce BUY conviction
+                buy_after_bear = signals["direction"] == Direction.BUY.value
+                neutral_buy = buy_after_bear & is_neutral
+                signals.loc[neutral_buy, "score"] = (
+                    signals.loc[neutral_buy, "score"] * 0.7
+                ).round(4)
+                # Convert to HOLD if score fell below risk engine minimum
+                low_neutral = neutral_buy & (signals["score"] < 0.55)
+                signals.loc[low_neutral, "direction"] = Direction.HOLD.value
+                signals.loc[low_neutral, "score"] = 0.0
+
+            else:
+                # No bar-by-bar data — fall back to cached regime for all bars
+                if self._regime == "BEAR":
+                    bear_mask = signals["direction"] == Direction.BUY.value
+                    signals.loc[bear_mask, "direction"] = Direction.HOLD.value
+                    signals.loc[bear_mask, "score"] = 0.0
+                elif self._regime == "NEUTRAL":
+                    buy_mask = signals["direction"] == Direction.BUY.value
+                    signals.loc[buy_mask, "score"] = (
+                        signals.loc[buy_mask, "score"] * 0.7
+                    ).round(4)
+                    low = buy_mask & (signals["score"] < 0.55)
+                    signals.loc[low, "direction"] = Direction.HOLD.value
+                    signals.loc[low, "score"] = 0.0
+
         return signals

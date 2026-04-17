@@ -74,42 +74,83 @@ def run_backtest(symbols: list[str]) -> None:
     """Backtest the momentum strategy on all symbols.
 
     Auto-detects data volume:
-      ≥315 bars (252 IS + 63 OOS): walk-forward with production MA params (10/30/20)
+      ≥315 bars (252 IS + 63 OOS): walk-forward with production MA params (5/15/10)
       <315 bars:                   single-pass with dev MA params (5/10/8), flagged DEV MODE
+
+    Regime filter:
+      When regime_filter=True (default), SPY data is fetched and passed to the
+      engine as regime_df.  Each symbol's results include a 'Blocked by regime'
+      count showing how many BUY signals were suppressed by the bear/neutral filter.
     """
+    import pandas as pd
     from src.backtester import BacktestConfig, WalkForwardSummary
 
     PROD_MIN = 315  # 252 IS + 63 OOS minimum for walk-forward
 
+    cfg = MomentumConfig(fast_period=5, slow_period=15, vol_period=10, bb_period=0)
     engine = BacktestEngine(config=BacktestConfig(
         commission_per_share=0.005,
         slippage_bps=0.5,
     ))
 
     with PostgresOhlcvFetcher() as fetcher:
+        # ── Fetch SPY for bar-by-bar regime detection ─────────────────────────
+        spy_df: pd.DataFrame = pd.DataFrame()
+        if cfg.regime_filter:
+            spy_df = fetcher.fetch("SPY", days=700)
+            if spy_df.empty:
+                logger.warning("SPY data not available — regime filter disabled for backtest")
+            else:
+                # Report current regime from SPY
+                _tmp_strategy = MomentumStrategy(cfg)
+                regime_now = _tmp_strategy.update_regime(spy_df)
+                print(f"\n  Market regime (SPY MA{cfg.regime_ma_period}): {regime_now}")
+                if _tmp_strategy._spy_price and _tmp_strategy._spy_ma200:
+                    spy_delta = (_tmp_strategy._spy_price - _tmp_strategy._spy_ma200) / _tmp_strategy._spy_ma200 * 100
+                    print(f"  SPY=${_tmp_strategy._spy_price:.2f}  MA{cfg.regime_ma_period}=${_tmp_strategy._spy_ma200:.2f}  delta={spy_delta:+.2f}%")
+
+        regime_df_arg = spy_df if not spy_df.empty else None
+
         for symbol in symbols:
-            df = fetcher.fetch(symbol, days=700)  # fetch full seeded history
+            df = fetcher.fetch(symbol, days=700)
             if df.empty:
                 print(f"  {symbol}: no data — skipping")
                 continue
 
             bars = len(df)
+            strategy = MomentumStrategy(cfg)
+
+            # ── Count regime-blocked BUY signals (for reporting) ──────────────
+            blocked_buys = 0
+            if regime_df_arg is not None:
+                try:
+                    sigs_raw = MomentumStrategy(
+                        MomentumConfig(**{**cfg.__dict__, "regime_filter": False})
+                    ).generate_signals_series(symbol, df)
+                    sigs_filtered = strategy.generate_signals_series(
+                        symbol, df, regime_df=regime_df_arg
+                    )
+                    buys_raw = int((sigs_raw["direction"] == "BUY").sum())
+                    buys_filtered = int((sigs_filtered["direction"] == "BUY").sum())
+                    blocked_buys = max(0, buys_raw - buys_filtered)
+                except Exception:
+                    pass
+
             if bars >= PROD_MIN:
-                # Production walk-forward — 5/15/10 generates more crossovers per
-                # 63-day OOS window than the original 10/30/20 config
-                strategy = MomentumStrategy(MomentumConfig(fast_period=5, slow_period=15, vol_period=10, bb_period=0))
                 print("\n" + "=" * 70)
                 print(f" WALK-FORWARD BACKTEST — {symbol}  ({bars} bars)")
+                if blocked_buys > 0:
+                    print(f" Regime filter: {blocked_buys} BUY signal(s) blocked")
                 print("=" * 70)
-                wf = engine.walk_forward(symbol, df, strategy)
+                wf = engine.walk_forward(symbol, df, strategy, regime_df=regime_df_arg)
                 _print_walkforward(wf)
             else:
-                # Dev single-pass
-                strategy = MomentumStrategy(MomentumConfig(fast_period=5, slow_period=10, vol_period=8))
                 print("\n" + "=" * 70)
                 print(f" SINGLE-PASS BACKTEST (DEV) — {symbol}  ({bars} bars, need ≥{PROD_MIN})")
+                if blocked_buys > 0:
+                    print(f" Regime filter: {blocked_buys} BUY signal(s) blocked")
                 print("=" * 70)
-                result = engine.run(symbol, df, strategy)
+                result = engine.run(symbol, df, strategy, regime_df=regime_df_arg)
                 gate = "✓ PASS" if result.passes_gate() else "✗ FAIL"
                 print(f"\n  {gate}  {result.summary()}")
                 for note in result.notes:
@@ -194,6 +235,22 @@ def run_live(symbols: list[str]) -> None:
 
     print()
     with PostgresOhlcvFetcher() as fetcher:
+        # ── Market regime detection (must happen before signal generation) ────
+        if strategy.config.regime_filter:
+            # Need ≥regime_ma_period trading days (~300 calendar days for MA200)
+            spy_days = max(strategy.config.regime_ma_period * 2, 300)
+            spy_df = fetcher.fetch("SPY", days=spy_days)
+            regime = strategy.update_regime(spy_df)
+            spy_price = strategy._spy_price or 0.0
+            spy_ma200 = strategy._spy_ma200 or 0.0
+            spy_delta_pct = ((spy_price - spy_ma200) / spy_ma200 * 100) if spy_ma200 > 0 else 0.0
+            print(f"\n  Market regime: {regime}  "
+                  f"SPY=${spy_price:.2f}  MA{strategy.config.regime_ma_period}=${spy_ma200:.2f}  "
+                  f"delta={spy_delta_pct:+.2f}%")
+            _check_and_record_regime_change(regime, spy_price, spy_ma200)
+            counts["regime"] = regime  # type: ignore[assignment]  # str in int dict — OK
+            counts["regime_spy_price"] = round(spy_price, 2)   # type: ignore[assignment]
+            counts["regime_spy_ma200"] = round(spy_ma200, 2)   # type: ignore[assignment]
         for symbol in symbols:
             df = fetcher.fetch(symbol, days=35)
             if df.empty:
@@ -275,6 +332,94 @@ def main() -> None:
     # Check live MaxDD after any live run — alert if it exceeds 8% warning threshold
     if args.mode in ("live", "all"):
         _check_max_drawdown_alert()
+
+
+def _check_and_record_regime_change(
+    current_regime: str,
+    spy_price: float,
+    spy_ma200: float,
+) -> None:
+    """Persist regime to system_metrics and send a Telegram alert on change.
+
+    Reads the last stored regime from system_metrics; if it differs from
+    current_regime, fires a ⚠️ or 🚨 alert.  Always non-fatal.
+    """
+    db_url = os.environ.get(
+        "DATABASE_URL",
+        "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
+    )
+    try:
+        import psycopg2
+        import json as _json
+
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                # Read last stored regime
+                cur.execute(
+                    """
+                    SELECT labels->>'regime'
+                    FROM system_metrics
+                    WHERE metric_name = 'market_regime'
+                    ORDER BY recorded_at DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                last_regime = row[0] if row else None
+
+                # Encode regime as numeric (useful for Grafana time-series)
+                regime_value = {"BULL": 1.0, "NEUTRAL": 0.0, "BEAR": -1.0}.get(current_regime, 0.0)
+                delta_pct = ((spy_price - spy_ma200) / spy_ma200 * 100) if spy_ma200 > 0 else 0.0
+
+                # Write current regime
+                cur.execute(
+                    """
+                    INSERT INTO system_metrics (metric_name, metric_value, labels)
+                    VALUES ('market_regime', %s, %s)
+                    """,
+                    (
+                        regime_value,
+                        _json.dumps({
+                            "regime": current_regime,
+                            "spy_price": round(spy_price, 4),
+                            "spy_ma200": round(spy_ma200, 4),
+                            "delta_pct": round(delta_pct, 4),
+                        }),
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Alert on regime change
+        if last_regime and last_regime != current_regime:
+            spy_delta = ((spy_price - spy_ma200) / spy_ma200 * 100) if spy_ma200 > 0 else 0.0
+            transition = f"{last_regime} \u2192 {current_regime}"
+            if current_regime == "BEAR":
+                msg = (
+                    f"Regime Change: {transition}\n"
+                    f"SPY: ${spy_price:.2f} | MA200: ${spy_ma200:.2f} | Delta: {spy_delta:+.2f}%\n"
+                    f"BUY signals suppressed until regime recovers."
+                )
+                _telegram_alert(msg, level="CRITICAL")
+            elif last_regime == "BEAR" and current_regime in ("NEUTRAL", "BULL"):
+                msg = (
+                    f"Regime Change: {transition}\n"
+                    f"SPY: ${spy_price:.2f} | MA200: ${spy_ma200:.2f} | Delta: {spy_delta:+.2f}%\n"
+                    f"BUY signals re-enabled."
+                )
+                _telegram_alert(msg, level="INFO")
+            else:
+                msg = (
+                    f"Regime Change: {transition}\n"
+                    f"SPY: ${spy_price:.2f} | MA200: ${spy_ma200:.2f} | Delta: {spy_delta:+.2f}%"
+                )
+                _telegram_alert(msg, level="WARNING")
+            logger.info("Regime change alert sent: %s", transition)
+
+    except Exception as e:
+        logger.debug("Regime record/alert failed (non-fatal): %s", e)
 
 
 def _check_max_drawdown_alert() -> None:

@@ -246,6 +246,9 @@ def send_daily_summary() -> bool:
     sell_count = signals.get("sell", 0)
     hold_count = signals.get("hold", 0)
     orders_submitted = signals.get("orders_submitted", 0)
+    regime = signals.get("regime", "")
+    spy_price = signals.get("regime_spy_price", 0.0)
+    spy_ma200 = signals.get("regime_spy_ma200", 0.0)
 
     pnl = _query_daily_pnl()
     daily_pnl = pnl.get("daily_pnl", 0.0)
@@ -256,8 +259,19 @@ def send_daily_summary() -> bool:
     daily_sign = "+" if daily_pnl >= 0 else ""
     cum_sign = "+" if cumulative_pnl >= 0 else ""
 
+    # Regime line (only included when regime data is available)
+    regime_emoji = {"BULL": "\U0001f7e2", "NEUTRAL": "\U0001f7e1", "BEAR": "\U0001f534"}.get(regime, "")
+    if regime and spy_price and spy_ma200:
+        spy_delta = (spy_price - spy_ma200) / spy_ma200 * 100
+        regime_line = f"Regime: {regime_emoji} {regime}  SPY=${spy_price:.2f}  MA200=${spy_ma200:.2f}  ({spy_delta:+.2f}%)\n"
+    elif regime:
+        regime_line = f"Regime: {regime_emoji} {regime}\n"
+    else:
+        regime_line = ""
+
     message = (
         f"Daily Summary \u2014 {today}\n"
+        f"{regime_line}"
         f"Signals: SELL\u00d7{sell_count} HOLD\u00d7{hold_count} BUY\u00d7{buy_count}\n"
         f"Orders: {orders_submitted} submitted\n"
         f"P&L today: {daily_sign}${daily_pnl:.2f} | Cumulative: {cum_sign}${cumulative_pnl:.2f}\n"
