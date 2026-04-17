@@ -101,6 +101,36 @@ resource "google_secret_manager_secret_iam_member" "sa_alpaca_secret" {
   depends_on = [google_project_service.apis]
 }
 
+# ── Telegram alert secrets ────────────────────────────────────────────────────
+
+resource "google_secret_manager_secret" "telegram_bot_token" {
+  secret_id = "telegram-bot-token"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret" "telegram_chat_id" {
+  secret_id = "telegram-chat-id"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_iam_member" "sa_telegram_bot_token" {
+  secret_id = google_secret_manager_secret.telegram_bot_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.quantai.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "sa_telegram_chat_id" {
+  secret_id = google_secret_manager_secret.telegram_chat_id.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.quantai.email}"
+}
+
 # ── IAM: Cloud Run Jobs SA permissions ────────────────────────────────────────
 # Cloud Run Jobs run as the existing quantai SA.
 # Grant it the Cloud Run Job Invoker role on itself so Scheduler can trigger it.
@@ -182,6 +212,26 @@ resource "google_cloud_run_v2_job" "daily_runner" {
           }
         }
 
+        # Telegram alert credentials from Secret Manager
+        env {
+          name = "TELEGRAM_BOT_TOKEN"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.telegram_bot_token.secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "TELEGRAM_CHAT_ID"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.telegram_chat_id.secret_id
+              version = "latest"
+            }
+          }
+        }
+
         # Mount Cloud SQL Auth Proxy socket
         volume_mounts {
           name       = "cloudsql"
@@ -204,6 +254,8 @@ resource "google_cloud_run_v2_job" "daily_runner" {
   depends_on = [
     google_artifact_registry_repository.quantai,
     google_secret_manager_secret.database_url,
+    google_secret_manager_secret.telegram_bot_token,
+    google_secret_manager_secret.telegram_chat_id,
     google_sql_database_instance.postgres,
     google_project_service.cloud_run_apis,
     google_project_iam_member.sa_cloudsql_client,

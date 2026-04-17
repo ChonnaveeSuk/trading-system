@@ -21,12 +21,25 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import os
 
 # Add the strategy directory to path when running as script
 sys.path.insert(0, os.path.dirname(__file__))
+
+# Non-fatal Telegram import — works once scripts/telegram_alert.py exists.
+# Absent credentials → send_alert() logs a warning and returns False.
+_SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts")
+sys.path.insert(0, _SCRIPTS_DIR)
+try:
+    from telegram_alert import send_alert as _telegram_alert
+    _TELEGRAM = True
+except ImportError:
+    def _telegram_alert(message: str, level: str = "INFO") -> bool:  # type: ignore[misc]
+        return False
+    _TELEGRAM = False
 
 from src.data.fetcher import PostgresOhlcvFetcher
 from src.signals.momentum import MomentumStrategy, MomentumConfig
@@ -176,6 +189,9 @@ def run_live(symbols: list[str]) -> None:
         client.disconnect()
         return
 
+    # Signal counters for daily summary and Telegram alerts
+    counts: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0, "orders_submitted": 0}
+
     print()
     with PostgresOhlcvFetcher() as fetcher:
         for symbol in symbols:
@@ -194,6 +210,10 @@ def run_live(symbols: list[str]) -> None:
             print(f"  {symbol:<10} → direction={signal.direction.value:<5} "
                   f"score={signal.score:.4f}  price=${current_price:.4f}")
 
+            direction_key = signal.direction.value.lower()
+            if direction_key in counts:
+                counts[direction_key] += 1
+
             if signal.direction == Direction.HOLD:
                 print(f"  {symbol:<10}   HOLD — not sent to OMS")
                 continue
@@ -202,12 +222,31 @@ def run_live(symbols: list[str]) -> None:
                 response = client.submit_signal(signal, current_price=current_price)
                 if response and response.accepted:
                     print(f"  {symbol:<10}   ✓ ORDER ACCEPTED: {response.order_id}")
+                    counts["orders_submitted"] += 1
+                    # Telegram: BUY/SELL order confirmed
+                    qty_str = str(signal.suggested_quantity) if signal.suggested_quantity else "?"
+                    _telegram_alert(
+                        f"{signal.direction.value} Order Submitted\n"
+                        f"Symbol: {symbol} | Price: ${current_price:.2f} | "
+                        f"Qty: {qty_str} | Score: {signal.score:.2f}",
+                        level=signal.direction.value,
+                    )
                 elif response:
                     print(f"  {symbol:<10}   ✗ REJECTED: {response.message}")
             except Exception as e:
                 print(f"  {symbol:<10}   ERROR: {e}")
 
     client.disconnect()
+
+    # Persist signal counts for run_daily.sh → telegram_alert.py --daily-summary
+    try:
+        signal_data = {**counts, "date": __import__("datetime").date.today().isoformat()}
+        with open("/tmp/quantai_signals_today.json", "w") as f:
+            json.dump(signal_data, f)
+        logger.debug("Signal counts written to /tmp/quantai_signals_today.json")
+    except Exception as e:
+        logger.debug("Could not write signals file (non-fatal): %s", e)
+
     print()
 
 
@@ -232,6 +271,62 @@ def main() -> None:
 
     if args.mode in ("live", "all"):
         run_live(args.symbols)
+
+    # Check live MaxDD after any live run — alert if it exceeds 8% warning threshold
+    if args.mode in ("live", "all"):
+        _check_max_drawdown_alert()
+
+
+def _check_max_drawdown_alert() -> None:
+    """Query live MaxDD from daily_pnl. Send CRITICAL alert if > 8%."""
+    try:
+        import psycopg2
+
+        db_url = os.environ.get(
+            "DATABASE_URL",
+            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
+        )
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH peaks AS (
+                        SELECT
+                            ending_value,
+                            MAX(ending_value) OVER (
+                                ORDER BY trading_date
+                                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                            ) AS peak_value
+                        FROM daily_pnl
+                        WHERE ending_value IS NOT NULL
+                    )
+                    SELECT COALESCE(
+                        MAX((peak_value - ending_value) / NULLIF(peak_value, 0)),
+                        0.0
+                    )
+                    FROM peaks
+                    """
+                )
+                row = cur.fetchone()
+                max_dd_pct = float(row[0]) * 100.0 if row else 0.0
+        finally:
+            conn.close()
+
+        if max_dd_pct > 8.0:
+            gate_status = "EXCEEDS gate limit (15%)" if max_dd_pct > 15.0 else "exceeds 8% warning"
+            _telegram_alert(
+                f"MaxDD Alert: {max_dd_pct:.2f}% {gate_status}\n"
+                f"Current MaxDD: {max_dd_pct:.2f}% | Gate limit: 15%\n"
+                f"Review portfolio — consider reducing exposure.",
+                level="CRITICAL",
+            )
+            logger.warning("MaxDD alert sent: %.2f%%", max_dd_pct)
+        else:
+            logger.info("MaxDD check OK: %.2f%% (threshold 8%%)", max_dd_pct)
+
+    except Exception as e:
+        logger.debug("MaxDD check failed (non-fatal): %s", e)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,14 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Non-fatal Telegram import — telegram_alert.py is in the same scripts/ directory
+sys.path.insert(0, os.path.dirname(__file__))
+try:
+    from telegram_alert import send_alert as _telegram_alert
+except ImportError:
+    def _telegram_alert(message: str, level: str = "INFO") -> bool:  # type: ignore[misc]
+        return False
+
 try:
     import requests
     import psycopg2
@@ -185,6 +193,13 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                 logger.info(
                     "FILLED: %s %s qty=%.4f @ $%.4f  fill_id=%s",
                     order["side"], symbol, filled_qty, fill_price, fill_id[:8],
+                )
+                # Telegram: fill confirmed
+                _telegram_alert(
+                    f"Fill Confirmed\n"
+                    f"Symbol: {symbol} | Side: {order['side']} | "
+                    f"Qty: {filled_qty:.4f} @ ${fill_price:.4f}",
+                    level=order["side"],  # "BUY" or "SELL"
                 )
 
             elif alpaca_status in ("canceled", "expired", "rejected"):

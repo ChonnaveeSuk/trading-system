@@ -59,6 +59,7 @@ ENV ALPACA_FETCHER=1
 # Cloud Run Jobs authenticate via the attached service account automatically.
 # gsutil/gcloud use ADC without any gcloud auth command.
 # psql / pg_dump use DATABASE_URL or POSTGRES_* vars (set via Secret Manager).
+# Telegram alerts use TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (set via Secret Manager).
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 # Default: daily runner. Backup job overrides CMD in the Cloud Run Job spec.
