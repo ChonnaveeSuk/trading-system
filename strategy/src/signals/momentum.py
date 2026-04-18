@@ -186,6 +186,32 @@ class MomentumStrategy:
             self._regime = "BULL"
             return "BULL"
 
+        # Staleness check: warn if latest bar is more than 7 calendar days old.
+        # Stale data during a correction could lock the regime in BEAR and block
+        # all BUY signals even after the market recovers.
+        import datetime as _dt
+        latest_date = spy_df.index[-1]
+        if hasattr(latest_date, "date"):
+            latest_date = latest_date.date()
+        data_age_days = (_dt.date.today() - latest_date).days
+        if data_age_days > 30:
+            logger.warning(
+                "SPY data is %d days stale (latest bar: %s) — "
+                "regime may be incorrect; defaulting to BULL. "
+                "Run seed_alpaca.py or seed_yfinance.py to refresh.",
+                data_age_days,
+                latest_date,
+            )
+            self._regime = "BULL"
+            return "BULL"
+        elif data_age_days > 7:
+            logger.warning(
+                "SPY data is %d days stale (latest bar: %s) — "
+                "regime computation may not reflect current market.",
+                data_age_days,
+                latest_date,
+            )
+
         spy_close = spy_df["close"]
         ma_val = float(spy_close.rolling(period).mean().iloc[-1])
         spy_price = float(spy_close.iloc[-1])

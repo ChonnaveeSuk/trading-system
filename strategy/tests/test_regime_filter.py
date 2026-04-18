@@ -26,10 +26,16 @@ from src.signals.momentum import MomentumStrategy, MomentumConfig
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _recent_dates(n: int) -> pd.DatetimeIndex:
+    """Return n daily dates ending at today (UTC) so staleness checks never fire."""
+    end = pd.Timestamp.today(tz="UTC").normalize()
+    return pd.date_range(end=end, periods=n, freq="D")
+
+
 def make_ohlcv(n: int, base: float = 100.0, trend: float = 0.001, seed: int = 42) -> pd.DataFrame:
     """Synthetic OHLCV with gentle uptrend and volume."""
     rng = np.random.default_rng(seed=seed)
-    dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+    dates = _recent_dates(n)
     noise = rng.normal(0, 0.008, n)
     close = base * np.cumprod(1 + trend + noise)
     high = close * (1 + abs(rng.normal(0, 0.005, n)))
@@ -48,7 +54,7 @@ def make_ohlcv(n: int, base: float = 100.0, trend: float = 0.001, seed: int = 42
 def make_spy_bull(n: int = 250) -> pd.DataFrame:
     """SPY data in BULL regime: price clearly above MA200 by >2%."""
     # Start at 400, end at 480 — well above any MA200
-    dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+    dates = _recent_dates(n)
     # First 200 bars at 400 (establish MA200 base), then climb to 480
     base = np.full(n, 400.0)
     base[200:] = np.linspace(420, 480, n - 200)
@@ -62,7 +68,7 @@ def make_spy_bull(n: int = 250) -> pd.DataFrame:
 
 def make_spy_bear(n: int = 250) -> pd.DataFrame:
     """SPY data in BEAR regime: price clearly below MA200 by >2%."""
-    dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+    dates = _recent_dates(n)
     # First 200 bars at 400, then crash to 360 (−10% from MA)
     close_arr = np.concatenate([
         np.full(200, 400.0),
@@ -78,7 +84,7 @@ def make_spy_bear(n: int = 250) -> pd.DataFrame:
 
 def make_spy_neutral(n: int = 250) -> pd.DataFrame:
     """SPY data in NEUTRAL regime: price within ±2% of MA200."""
-    dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+    dates = _recent_dates(n)
     # Price oscillates tightly around 400 — stays within ±1% of MA200
     close_arr = 400.0 + np.sin(np.linspace(0, 4 * np.pi, n)) * 2.0  # ±0.5% band
     close_arr += np.random.default_rng(103).normal(0, 0.3, n)
@@ -174,7 +180,7 @@ class TestGenerateSignalRegime:
     def _make_buy_scenario(self, n: int = 300) -> pd.DataFrame:
         """Data that reliably generates a BUY signal (oversold RSI at the end)."""
         # Up-then-sharply-down to trigger RSI oversold BUY
-        dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+        dates = _recent_dates(n)
         close = np.concatenate([
             np.linspace(100, 130, n - 20),   # uptrend (builds fast MA > slow MA)
             np.linspace(130, 90, 20),          # sharp crash → RSI oversold
@@ -406,7 +412,7 @@ class TestRegimeBoundaries:
 
     def _make_spy_at_ratio(self, ratio: float, n: int = 250) -> pd.DataFrame:
         """Build SPY where price ends exactly at MA200 × (1 + ratio)."""
-        dates = pd.date_range("2022-01-01", periods=n, freq="D", tz="UTC")
+        dates = _recent_dates(n)
         # First 200 bars flat at 400 → MA200 ≈ 400 when all bars are done
         # Last bar at 400 × (1 + ratio)
         close = np.full(n, 400.0, dtype=float)

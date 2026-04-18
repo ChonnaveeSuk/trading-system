@@ -240,6 +240,14 @@ def run_live(symbols: list[str]) -> None:
             # Need ≥regime_ma_period trading days (~300 calendar days for MA200)
             spy_days = max(strategy.config.regime_ma_period * 2, 300)
             spy_df = fetcher.fetch("SPY", days=spy_days)
+            # Log SPY data freshness before computing regime
+            if not spy_df.empty:
+                import datetime as _dt
+                latest = spy_df.index[-1]
+                if hasattr(latest, "date"):
+                    latest = latest.date()
+                data_age = (_dt.date.today() - latest).days
+                logger.info("SPY data: %d bars, latest=%s (%d days old)", len(spy_df), latest, data_age)
             regime = strategy.update_regime(spy_df)
             spy_price = strategy._spy_price or 0.0
             spy_ma200 = strategy._spy_ma200 or 0.0
@@ -247,6 +255,10 @@ def run_live(symbols: list[str]) -> None:
             print(f"\n  Market regime: {regime}  "
                   f"SPY=${spy_price:.2f}  MA{strategy.config.regime_ma_period}=${spy_ma200:.2f}  "
                   f"delta={spy_delta_pct:+.2f}%")
+            if regime == "BEAR":
+                print(f"  [REGIME] BEAR market — all BUY signals suppressed")
+            elif regime == "NEUTRAL":
+                print(f"  [REGIME] NEUTRAL — BUY scores reduced by 30%")
             _check_and_record_regime_change(regime, spy_price, spy_ma200)
             counts["regime"] = regime  # type: ignore[assignment]  # str in int dict — OK
             counts["regime_spy_price"] = round(spy_price, 2)   # type: ignore[assignment]
