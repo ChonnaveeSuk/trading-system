@@ -156,11 +156,12 @@ log "Step 3/4: Updating daily_pnl table…"
 python3 "${SCRIPT_DIR}/update_daily_pnl.py"
 log "Step 3/4: daily_pnl updated."
 
-# ── Step 3.5: Send daily Telegram summary ─────────────────────────────────────
+# ── Step 3.5: Send morning report via Telegram ────────────────────────────────
+# Comprehensive report: regime, signals, P&L, 90-day gate progress, next run.
 # Non-fatal: Telegram failure never aborts the daily run.
-log "Step 3.5: Sending daily Telegram summary…"
-python3 "${SCRIPT_DIR}/telegram_alert.py" --daily-summary || \
-    log "Step 3.5: Telegram summary failed (non-fatal)."
+log "Step 3.5: Sending morning report…"
+python3 "${SCRIPT_DIR}/morning_report.py" || \
+    log "Step 3.5: Morning report failed (non-fatal)."
 
 # ── Step 4: PostgreSQL backup ─────────────────────────────────────────────────
 log "Step 4/4: Running PostgreSQL backup to GCS…"
