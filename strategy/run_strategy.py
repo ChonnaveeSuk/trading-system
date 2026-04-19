@@ -66,6 +66,17 @@ SYMBOLS = [
     "URA", "URNM", "DBC", "SCCO", "MP",
     "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
 ]
+
+# Live trading symbols — excludes instruments not tradeable on Alpaca paper:
+#   BNB-USD: not listed on Alpaca (data frozen since Mar 29; spurious signals)
+#   GBP-USD: FX — Alpaca paper does not support spot FX
+#   EUR-USD: FX — same
+LIVE_SYMBOLS = [s for s in SYMBOLS if s not in {"BNB-USD", "GBP-USD", "EUR-USD"}]
+
+# Max calendar days of staleness before skipping a symbol in live mode.
+# 5 trading days = 7 calendar days covers weekends + 1 holiday.
+_LIVE_STALE_DAYS = 7
+
 GRPC_HOST = os.environ.get("GRPC_HOST", "localhost")
 GRPC_PORT = int(os.environ.get("GRPC_PORT", "50051"))
 
@@ -264,9 +275,23 @@ def run_live(symbols: list[str]) -> None:
             counts["regime_spy_price"] = round(spy_price, 2)   # type: ignore[assignment]
             counts["regime_spy_ma200"] = round(spy_ma200, 2)   # type: ignore[assignment]
         for symbol in symbols:
-            df = fetcher.fetch(symbol, days=35)
+            # 90 calendar days ≈ 63 trading days — enough for stable RSI(7)+ATR(14)
+            # context and for trend_ride_min_bars consecutive-uptrend detection.
+            df = fetcher.fetch(symbol, days=90)
             if df.empty:
                 print(f"  {symbol}: no data")
+                continue
+
+            # Staleness gate: skip symbols whose latest bar is >7 calendar days old.
+            import datetime as _dt
+            latest_date = df.index[-1].date() if hasattr(df.index[-1], "date") else df.index[-1]
+            data_age_days = (_dt.date.today() - latest_date).days
+            if data_age_days > _LIVE_STALE_DAYS:
+                logger.warning(
+                    "%s: OHLCV data is %d days stale (latest=%s) — skipping live signal",
+                    symbol, data_age_days, latest_date,
+                )
+                print(f"  {symbol:<10}   SKIPPED — data {data_age_days}d stale (latest={latest_date})")
                 continue
 
             current_price = fetcher.fetch_latest_close(symbol)
@@ -276,8 +301,10 @@ def run_live(symbols: list[str]) -> None:
 
             signal = strategy.generate_signal(symbol, df, portfolio_value=100_000.0)
 
+            trend_ride_flag = " [trend_ride]" if signal.features.get("trend_ride") else ""
             print(f"  {symbol:<10} → direction={signal.direction.value:<5} "
-                  f"score={signal.score:.4f}  price=${current_price:.4f}")
+                  f"score={signal.score:.4f}  price=${current_price:.4f}  "
+                  f"rsi={signal.features.get('rsi', '?'):.1f}{trend_ride_flag}")
 
             direction_key = signal.direction.value.lower()
             if direction_key in counts:
@@ -330,16 +357,19 @@ def main() -> None:
     parser.add_argument(
         "--symbols",
         nargs="+",
-        default=SYMBOLS,
-        help="Symbols to trade (default: 31 curated production symbols)",
+        default=None,
+        help="Override symbols (default: SYMBOLS for backtest, LIVE_SYMBOLS for live)",
     )
     args = parser.parse_args()
 
+    backtest_syms = args.symbols or SYMBOLS
+    live_syms = args.symbols or LIVE_SYMBOLS
+
     if args.mode in ("backtest", "all"):
-        run_backtest(args.symbols)
+        run_backtest(backtest_syms)
 
     if args.mode in ("live", "all"):
-        run_live(args.symbols)
+        run_live(live_syms)
 
     # Check live MaxDD after any live run — alert if it exceeds 8% warning threshold
     if args.mode in ("live", "all"):

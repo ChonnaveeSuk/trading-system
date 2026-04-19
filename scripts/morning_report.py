@@ -176,11 +176,20 @@ def _query_gate() -> dict:
                     if std_r > 0:
                         sharpe = (mean_r / std_r) * (252 ** 0.5)
 
+                # Consecutive days without a new trade (from most recent)
+                no_trade_days = 0
+                for r in reversed(rows):
+                    if int(r[3] or 0) == 0:
+                        no_trade_days += 1
+                    else:
+                        break
+
                 return {
                     "days_elapsed": days_elapsed,
                     "total_trades": total_trades,
                     "max_dd_pct": max_dd_pct,
                     "sharpe": sharpe,
+                    "no_trade_days": no_trade_days,
                 }
         finally:
             conn.close()
@@ -263,13 +272,16 @@ def build_report() -> tuple[str, str]:
         )
     else:
         sig_line = f"BUY:  {buy_count} | SELL: {sell_count} | HOLD: {hold_count}"
+        orders_submitted = int(signals_data.get("orders_submitted", 0))
+        if orders_submitted > 0:
+            sig_line += f"\nOrders submitted: {orders_submitted}"
         if buy_count == 0 and (sell_count > 0 or hold_count > 0):
             if regime == "BEAR":
                 blocked = "BUY blocked by: Regime (BEAR — all BUY suppressed)"
             elif regime == "NEUTRAL":
                 blocked = "BUY blocked by: Regime (NEUTRAL — reduced scores)"
             else:
-                blocked = "BUY blocked by: MA crossover pending (not regime)"
+                blocked = "Waiting: MA crossover or RSI pullback to entry zone"
             sig_line += f"\n{blocked}"
         signals_section = f"\U0001f4c8 Signals ({yesterday_label})\n{sig_line}"
 
@@ -308,11 +320,13 @@ def build_report() -> tuple[str, str]:
         else (" \u26a0\ufe0f" if max_dd_pct < 15.0 else " \U0001f6a8")
     )
 
+    no_trade_days = gate_data.get("no_trade_days", 0)
+    no_trade_str = f" ({no_trade_days}d no new trades)" if no_trade_days >= 3 else ""
     gate_section = (
         f"\U0001f3af 90-Day Gate Progress (Day {days_elapsed}/90)\n"
         f"Sharpe:  {sharpe_str}{sharpe_badge}\n"
         f"MaxDD:   {max_dd_pct:.2f}%{dd_badge} (gate: <15%)\n"
-        f"Trades:  {total_trades}"
+        f"Trades:  {total_trades}{no_trade_str}"
     )
 
     # ── Next run ──────────────────────────────────────────────────────────────

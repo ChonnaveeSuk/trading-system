@@ -97,6 +97,20 @@ class MomentumConfig:
     # Distinct from the standalone RSI signal: this adjusts existing MA/BB scores.
     rsi_filter: bool = True
 
+    # Trend continuation BUY: enter established uptrends on a mild RSI pullback.
+    #
+    # Fires when ALL of:
+    #   - fast MA has been above slow MA for ≥ trend_ride_min_bars consecutive bars
+    #   - rsi_oversold < RSI < trend_ride_rsi   (pullback zone, not yet oversold)
+    #   - price > slow MA  (uptrend intact)
+    #   - non-FX symbol (sparse-volume instruments excluded)
+    #
+    # Priority: RSI oversold → RSI overbought → trend_ride → BB → MA crossover.
+    # Regime filter applies normally (blocked in BEAR, reduced in NEUTRAL).
+    # Set trend_ride_rsi=0 to disable.
+    trend_ride_rsi: float = 45.0      # RSI pullback threshold in established uptrend
+    trend_ride_min_bars: int = 10     # Min consecutive bars with fast > slow
+
     # Market regime filter — suppress BUY signals in bear markets.
     #
     # Regime is detected from a proxy symbol (default: SPY) using a long-period MA:
@@ -371,6 +385,26 @@ class MomentumStrategy:
         # whipsaws in trending markets. 4x multiplier requires ~20bps min spread.
         noise_threshold = self.config.noise_filter_bps * (4.0 if sparse_volume else 1.0)
 
+        # ── Trend continuation BUY ────────────────────────────────────────────
+        # Catches entries in established uptrends that started before live trading.
+        # Fires when fast > slow for N consecutive bars AND RSI is in a pullback zone.
+        # Disabled for sparse-volume (FX) instruments — same rule as RSI mean-reversion.
+        trend_ride_buy = False
+        if (
+            self.config.trend_ride_rsi > 0
+            and not sparse_volume
+            and not rsi_buy  # not already at oversold threshold
+            and not rsi_sell
+            and curr_fast > curr_slow
+            and self.config.rsi_oversold < curr_rsi < self.config.trend_ride_rsi
+        ):
+            n = self.config.trend_ride_min_bars
+            if len(fast_ma) >= n and len(slow_ma) >= n:
+                fa_tail = fast_ma.values[-n:]
+                sa_tail = slow_ma.values[-n:]
+                if not np.any(np.isnan(fa_tail)) and not np.any(np.isnan(sa_tail)):
+                    trend_ride_buy = bool(np.all(fa_tail > sa_tail))
+
         # MA-based direction (requires noise filter + volume confirmation + price momentum)
         if spread_abs_bps >= noise_threshold and volume_confirmed:
             if bullish_cross and price_momentum_up:
@@ -411,13 +445,16 @@ class MomentumStrategy:
         if ma_direction == Direction.BUY and not in_uptrend:
             ma_direction = Direction.HOLD
 
-        # Combined direction: RSI → BB → MA crossover (priority order)
+        # Combined direction: RSI → trend_ride → BB → MA crossover (priority order)
         # RSI BUY is a standalone mean-reversion signal (no MA uptrend required).
-        # Long-term trend filter (in_uptrend) still gates all BUY signals.
+        # trend_ride BUY catches established uptrends that started before live trading.
+        # Long-term trend filter (in_uptrend) gates all BUY signals.
         if rsi_buy and in_uptrend:
             direction = Direction.BUY
         elif rsi_sell:
             direction = Direction.SELL  # take profit regardless of trend
+        elif trend_ride_buy and in_uptrend:
+            direction = Direction.BUY
         elif bb_buy:
             direction = Direction.BUY
         elif ma_direction != Direction.HOLD:
@@ -561,6 +598,7 @@ class MomentumStrategy:
             "regime": self._regime if self.config.regime_filter else "DISABLED",
             "regime_spy_price": round(self._spy_price, 4) if self._spy_price is not None else None,
             "regime_spy_ma200": round(self._spy_ma200, 4) if self._spy_ma200 is not None else None,
+            "trend_ride": trend_ride_buy,
         }
 
         return SignalResult(
