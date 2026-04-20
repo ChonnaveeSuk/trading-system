@@ -2,6 +2,54 @@
 
 ---
 
+## Session 2026-04-20 — trend_ride Exit Gate (SHIPPED)
+
+### Audit Result: Hypothesis CONFIRMED
+
+**Root cause:** In `generate_signal()`, a bearish MA crossover (MA5 < MA15) fires `SELL`
+regardless of how the position was entered. A trend_ride entry (MA5 > MA15 for 10+ bars,
+RSI 30-45) is followed by a continued pullback that quickly causes MA5 to cross below MA15 —
+exiting at the pullback bottom.
+
+**Critical second finding:** `trend_ride_buy` was ONLY in `generate_signal()` (live path).
+It was completely absent from `generate_signals_series()` (backtester path). All prior
+metrics (Sharpe 1.61, MaxDD 8.86%) were computed WITHOUT trend_ride entries — the feature
+had zero backtest coverage.
+
+### Implementation
+
+**Exit gate (`generate_signal()` + `generate_signals_series()`):**
+- When MA fast/slow bearish cross fires SELL after established uptrend (fast > slow for
+  `trend_ride_min_bars` consecutive bars), check wider MAs (MA20, MA50).
+- MA20 > MA50 → major trend intact → suppress SELL (position exits via RSI > 70 instead).
+- MA20 < MA50 → major trend break → SELL fires normally.
+- Gate disabled for sparse-volume (FX) and when `trend_ride_exit_fast/slow = 0`.
+- New features key: `trend_ride_exit_gated: bool`.
+
+**Backtester parity (`generate_signals_series()`):**
+- Added vectorized trend_ride BUY detection (rolling minimum of fast-slow spread > 0).
+- Signals DataFrame now includes `trend_ride` boolean column.
+- Backtest now reflects live behavior; prior Sharpe/MaxDD numbers are pre-trend_ride baseline.
+
+**New config params (`MomentumConfig`):**
+- `trend_ride_exit_fast: int = 20`
+- `trend_ride_exit_slow: int = 50`
+
+**Deferred (requires state — Phase 2 of exit logic):**
+- entry_high tracking → wider ATR trailing stop on trend_ride positions
+- bars_held patient fallback (> 20 bars AND MA5 < MA15 → exit)
+- DB migration: positions.signal_type, entry_high, entry_ts
+- client_order_id signal_type encoding
+
+### Test Count After Session
+| Suite | Before | After | New tests |
+|-------|--------|-------|-----------|
+| Rust  | 46     | 46    | 0 |
+| Python| 150    | 166   | +16 (exit gate + backtester parity) |
+| **Total** | **196** | **212** | **+16** |
+
+---
+
 ## Session 2026-04-06 — Volume Filter (REVERTED)
 
 ### Objective
