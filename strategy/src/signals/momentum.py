@@ -27,9 +27,11 @@
 #   Capped at 5% of portfolio (matching risk engine hard limit).
 #   Stop loss placed at entry ± 1× ATR instead of slow MA ± 1%.
 #
-# Parameters: 10 (fast_period, slow_period, vol_period, noise_filter_bps,
+# Parameters: 16 (fast_period, slow_period, vol_period, noise_filter_bps,
 #                rsi_oversold, rsi_overbought, rsi_period, bb_period,
-#                bb_std_dev, trend_period, atr_period, atr_risk_pct)
+#                bb_std_dev, trend_period, atr_period, atr_risk_pct,
+#                rsi_filter, trend_ride_rsi, trend_ride_min_bars,
+#                trend_ride_exit_fast, trend_ride_exit_slow)
 #
 # WARNING: 30 days of data is INSUFFICIENT for production use.
 # The design requires min 252 trading days lookback. This implementation
@@ -110,6 +112,22 @@ class MomentumConfig:
     # Set trend_ride_rsi=0 to disable.
     trend_ride_rsi: float = 45.0      # RSI pullback threshold in established uptrend
     trend_ride_min_bars: int = 10     # Min consecutive bars with fast > slow
+
+    # Trend-ride exit gate: when a MA fast/slow bearish cross fires SELL on a
+    # bar that follows an established uptrend (fast > slow for trend_ride_min_bars),
+    # suppress that SELL if the wider MAs (exit_fast > exit_slow) confirm the major
+    # trend is still intact.  This prevents exiting a trend_ride position at the
+    # pullback bottom when the uptrend is only temporarily interrupted.
+    #
+    # Exit fires on any of these (whichever comes first):
+    #   1. RSI > rsi_overbought → profit take (already in strategy — highest priority)
+    #   2. MA exit_fast < exit_slow → major trend break (gate opens → SELL fires)
+    #   3. MA fast/slow bearish cross while gate is open → normal SELL
+    #
+    # Set trend_ride_exit_fast=0 or trend_ride_exit_slow=0 to disable the gate
+    # (all MA bearish crosses fire SELL as before).
+    trend_ride_exit_fast: int = 20   # wider fast MA period for trend break detection
+    trend_ride_exit_slow: int = 50   # wider slow MA period for trend break detection
 
     # Market regime filter — suppress BUY signals in bear markets.
     #
@@ -445,6 +463,42 @@ class MomentumStrategy:
         if ma_direction == Direction.BUY and not in_uptrend:
             ma_direction = Direction.HOLD
 
+        # ── Trend-ride exit gate ──────────────────────────────────────────────
+        # When a MA bearish cross fires after an established uptrend, check whether
+        # the major trend (wider MAs) is still intact.  If MA_exit_fast > MA_exit_slow,
+        # the bearish fast/slow cross is just a pullback — suppress the SELL.
+        # RSI SELL (overbought) always bypasses this gate (highest priority).
+        trend_ride_exit_gated = False
+        if (
+            ma_direction == Direction.SELL
+            and self.config.trend_ride_rsi > 0
+            and self.config.trend_ride_exit_fast > 0
+            and self.config.trend_ride_exit_slow > 0
+            and not sparse_volume
+        ):
+            n = self.config.trend_ride_min_bars
+            ef = self.config.trend_ride_exit_fast
+            es = self.config.trend_ride_exit_slow
+            if len(fast_ma) > n and len(close) >= es:
+                # Check if fast was above slow for N bars immediately before this bar
+                fa_prev = fast_ma.values[-(n + 1):-1]
+                sa_prev = slow_ma.values[-(n + 1):-1]
+                if not np.any(np.isnan(fa_prev)) and not np.any(np.isnan(sa_prev)):
+                    bars_above = int(np.sum(fa_prev > sa_prev))
+                    if bars_above >= n:  # recently established uptrend
+                        ef_val = float(close.rolling(ef).mean().iloc[-1])
+                        es_val = float(close.rolling(es).mean().iloc[-1])
+                        if not np.isnan(ef_val) and not np.isnan(es_val):
+                            if ef_val > es_val:  # major trend still up
+                                ma_direction = Direction.HOLD
+                                trend_ride_exit_gated = True
+                                logger.debug(
+                                    "%s: trend_ride exit gate: MA%d bearish cross suppressed "
+                                    "(MA%d=%.4f > MA%d=%.4f, wider trend intact)",
+                                    symbol, self.config.fast_period,
+                                    ef, ef_val, es, es_val,
+                                )
+
         # Combined direction: RSI → trend_ride → BB → MA crossover (priority order)
         # RSI BUY is a standalone mean-reversion signal (no MA uptrend required).
         # trend_ride BUY catches established uptrends that started before live trading.
@@ -599,6 +653,7 @@ class MomentumStrategy:
             "regime_spy_price": round(self._spy_price, 4) if self._spy_price is not None else None,
             "regime_spy_ma200": round(self._spy_ma200, 4) if self._spy_ma200 is not None else None,
             "trend_ride": trend_ride_buy,
+            "trend_ride_exit_gated": trend_ride_exit_gated,
         }
 
         return SignalResult(
@@ -713,11 +768,63 @@ class MomentumStrategy:
         # RSI SELL fires regardless of trend (take profit / exit).
         rsi_buy_filtered = rsi_buy & in_uptrend
 
-        # Combined direction: RSI → BB → MA crossover (priority order, last wins)
+        # ── Trend-ride BUY (vectorized) ───────────────────────────────────────
+        # Mirrors generate_signal() logic: fast > slow for N consecutive bars AND
+        # RSI is in the pullback zone (oversold < RSI < trend_ride_rsi).
+        # Disabled for sparse-volume (FX) instruments.
+        n_tr = self.config.trend_ride_min_bars
+        if self.config.trend_ride_rsi > 0 and not sparse_volume and len(df) >= n_tr:
+            fast_minus_slow = fast_ma - slow_ma
+            # rolling(n).min() > 0: all n bars in window had fast > slow
+            min_spread_n = fast_minus_slow.rolling(n_tr).min()
+            trend_established = min_spread_n > 0  # all n bars: fast > slow
+
+            tr_in_zone = (
+                (rsi > self.config.rsi_oversold) &
+                (rsi < self.config.trend_ride_rsi) &
+                (fast_ma > slow_ma) &
+                trend_established
+            )
+            # Exclude bars where RSI already at overbought (rsi_sell takes priority)
+            trend_ride_signal = tr_in_zone & ~rsi_buy & ~rsi_sell & in_uptrend
+        else:
+            trend_ride_signal = pd.Series(False, index=df.index)
+
+        signals["trend_ride"] = trend_ride_signal
+
+        # ── Trend-ride exit gate (vectorized) ────────────────────────────────
+        # Suppress MA bearish cross SELL when the fast/slow MAs have been in an
+        # established uptrend recently AND the wider exit MAs (MA20/MA50) confirm
+        # the major trend is intact.  Mirrors generate_signal() gate logic.
+        if (
+            self.config.trend_ride_rsi > 0
+            and self.config.trend_ride_exit_fast > 0
+            and self.config.trend_ride_exit_slow > 0
+            and not sparse_volume
+            and len(close) >= self.config.trend_ride_exit_slow
+        ):
+            ef = self.config.trend_ride_exit_fast
+            es = self.config.trend_ride_exit_slow
+            exit_fast_s = close.rolling(ef).mean()
+            exit_slow_s = close.rolling(es).mean()
+            wider_trend_up = exit_fast_s > exit_slow_s  # MA_exit_fast > MA_exit_slow
+
+            # Was fast MA above slow MA for n_tr bars immediately before current bar?
+            # shift(1) looks at the rolling window ending at the previous bar.
+            fast_minus_slow_s = fast_ma - slow_ma
+            min_spread_prev = fast_minus_slow_s.rolling(n_tr).min().shift(1)
+            recently_established = (min_spread_prev > 0) & min_spread_prev.notna()
+
+            # Gate: suppress ma_sell when recently established uptrend + wider trend up
+            protected = ma_sell & recently_established & wider_trend_up
+            ma_sell = ma_sell & ~protected
+
+        # Combined direction: RSI → trend_ride → BB → MA crossover (priority order, last wins)
         signals["direction"] = Direction.HOLD.value
         signals.loc[ma_buy, "direction"] = Direction.BUY.value
         signals.loc[ma_sell, "direction"] = Direction.SELL.value
         signals.loc[bb_buy, "direction"] = Direction.BUY.value
+        signals.loc[trend_ride_signal, "direction"] = Direction.BUY.value
         signals.loc[rsi_buy_filtered, "direction"] = Direction.BUY.value
         signals.loc[rsi_sell, "direction"] = Direction.SELL.value
 
