@@ -401,3 +401,55 @@ class TestStalenessGate:
         from run_strategy import _LIVE_STALE_DAYS
         # Must cover weekends (2d) + at least 1 holiday
         assert _LIVE_STALE_DAYS >= 5
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests: trend_ride symbol blacklist (Phase 2 hardening)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTrendRideBlacklist:
+    """AAPL, URNM, HL must never generate trend_ride entries.
+    Other symbols (GOLD, KGC) must still work normally."""
+
+    def _cfg(self, **kwargs) -> MomentumConfig:
+        defaults = dict(
+            fast_period=5, slow_period=15, vol_period=10, bb_period=0,
+            atr_period=0,
+            trend_ride_rsi=45.0,
+            trend_ride_min_bars=10,
+            regime_filter=False,
+        )
+        defaults.update(kwargs)
+        return MomentumConfig(**defaults)
+
+    def _uptrend_pullback_df(self) -> "pd.DataFrame":
+        closes = _make_pullback_tail(_make_uptrend(60, start=100.0, slope=0.3), pullback_pct=0.025)
+        return make_ohlcv(closes)
+
+    def test_trend_ride_excludes_aapl(self):
+        """AAPL must never fire trend_ride (WF Sharpe regressed 1.96→0.204)."""
+        df = self._uptrend_pullback_df()
+        sig = MomentumStrategy(self._cfg()).generate_signal("AAPL", df)
+        assert sig.features.get("trend_ride") is False, (
+            f"AAPL trend_ride must be blacklisted, got features={sig.features}"
+        )
+
+    def test_trend_ride_excludes_urnm(self):
+        """URNM must never fire trend_ride (0/4 win rate in backtest)."""
+        df = self._uptrend_pullback_df()
+        sig = MomentumStrategy(self._cfg()).generate_signal("URNM", df)
+        assert sig.features.get("trend_ride") is False
+
+    def test_trend_ride_excludes_hl(self):
+        """HL must never fire trend_ride (WF Sharpe −1.047)."""
+        df = self._uptrend_pullback_df()
+        sig = MomentumStrategy(self._cfg()).generate_signal("HL", df)
+        assert sig.features.get("trend_ride") is False
+
+    def test_trend_ride_allows_other_symbols(self):
+        """GOLD and KGC are NOT blacklisted — trend_ride should still evaluate normally."""
+        from src.signals.momentum import TREND_RIDE_EXCLUDED_SYMBOLS
+        for sym in ("GOLD", "KGC", "AEM", "GDX"):
+            assert sym not in TREND_RIDE_EXCLUDED_SYMBOLS, (
+                f"{sym} should not be in TREND_RIDE_EXCLUDED_SYMBOLS"
+            )

@@ -59,6 +59,12 @@ PRODUCTION_MIN_BARS = 252  # Per design — flag if below this
 # Override via MomentumConfig.rsi_period for RSI(14) mean-reversion layer.
 _DEFAULT_RSI_PERIOD = 7
 
+# Symbols where trend_ride has demonstrated negative walk-forward performance:
+#   AAPL:  WF Sharpe regression 1.96 → 0.204 (Feb-2026 correction, gap-down risk)
+#   URNM:  0/4 win rate across all trend_ride entries
+#   HL:    WF Sharpe −1.047 (sub-$10 silver miner, 2× ATR overwhelmed)
+TREND_RIDE_EXCLUDED_SYMBOLS: frozenset[str] = frozenset({"AAPL", "URNM", "HL"})
+
 
 def _compute_rsi(close: pd.Series, period: int) -> pd.Series:
     """Wilder Smoothed RSI.  Returns NaN for bars before the first full window."""
@@ -408,7 +414,9 @@ class MomentumStrategy:
         # Fires when fast > slow for N consecutive bars AND RSI is in a pullback zone.
         # Disabled for sparse-volume (FX) instruments — same rule as RSI mean-reversion.
         trend_ride_buy = False
-        if (
+        if symbol in TREND_RIDE_EXCLUDED_SYMBOLS:
+            logger.info("%s: trend_ride excluded (backtest blacklist)", symbol)
+        elif (
             self.config.trend_ride_rsi > 0
             and not sparse_volume
             and not rsi_buy  # not already at oversold threshold
@@ -771,9 +779,12 @@ class MomentumStrategy:
         # ── Trend-ride BUY (vectorized) ───────────────────────────────────────
         # Mirrors generate_signal() logic: fast > slow for N consecutive bars AND
         # RSI is in the pullback zone (oversold < RSI < trend_ride_rsi).
-        # Disabled for sparse-volume (FX) instruments.
+        # Disabled for sparse-volume (FX) instruments and blacklisted symbols.
         n_tr = self.config.trend_ride_min_bars
-        if self.config.trend_ride_rsi > 0 and not sparse_volume and len(df) >= n_tr:
+        if symbol in TREND_RIDE_EXCLUDED_SYMBOLS:
+            logger.info("%s: trend_ride excluded (backtest blacklist)", symbol)
+            trend_ride_signal = pd.Series(False, index=df.index)
+        elif self.config.trend_ride_rsi > 0 and not sparse_volume and len(df) >= n_tr:
             fast_minus_slow = fast_ma - slow_ma
             # rolling(n).min() > 0: all n bars in window had fast > slow
             min_spread_n = fast_minus_slow.rolling(n_tr).min()

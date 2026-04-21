@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
@@ -248,3 +248,137 @@ class TestTrailingStopSimulate:
         buys = [t for t in result["trades"] if t["side"] == "BUY"]
         # Should have at most 1 BUY (no double-entry on stop bar)
         assert len(buys) <= 2  # at most initial BUY + one re-entry after stop
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adaptive trailing stop: trend_ride=3×ATR, momentum=2×ATR
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAdaptiveTrailingStop:
+    """trend_ride entries must use trailing_trend_ride_atr_mult (3.0×);
+    momentum entries must use trailing_atr_mult (2.0×)."""
+
+    def _make_signals_with_trend_ride(
+        self,
+        price_df: "pd.DataFrame",
+        buy_idx: int,
+        is_trend_ride: bool,
+    ) -> "pd.DataFrame":
+        """Build a minimal signals DataFrame with the trend_ride flag set."""
+        signals = _make_signals(price_df, {buy_idx: "BUY"})
+        signals["trend_ride"] = False
+        if is_trend_ride:
+            signals.iloc[buy_idx, signals.columns.get_loc("trend_ride")] = True
+        return signals
+
+    def test_trailing_stop_3x_atr_for_trend_ride(self):
+        """A trend_ride BUY entry must use 3.0× ATR for the trailing stop distance."""
+        # 25 warmup bars so ATR(14) is valid, then BUY on bar 25
+        closes = [100.0] * 25 + [100.0]
+        df = _make_price_df(closes)
+        signals = self._make_signals_with_trend_ride(df, buy_idx=25, is_trend_ride=True)
+
+        result = BacktestEngine._simulate_on_slice(
+            df, signals, 10_000.0, 0.10,
+            trailing_stop=True,
+            trailing_atr_mult=2.0,
+            trailing_trend_ride_atr_mult=3.0,
+        )
+        buys = [t for t in result["trades"] if t["side"] == "BUY"]
+        assert len(buys) == 1
+        buy = buys[0]
+        assert buy.get("signal_type") == "trend_ride", (
+            f"Expected signal_type='trend_ride', got {buy.get('signal_type')}"
+        )
+        # trail_stop_initial must be further from entry (wider stop = 3× ATR)
+        stop_distance = buy["price"] - buy["trail_stop_initial"]
+        assert stop_distance > 0, "Trail stop must be below entry for a long"
+
+    def test_trailing_stop_2x_atr_for_momentum(self):
+        """A momentum (non-trend_ride) BUY entry must use 2.0× ATR for the stop."""
+        closes = [100.0] * 25 + [100.0]
+        df = _make_price_df(closes)
+        signals = self._make_signals_with_trend_ride(df, buy_idx=25, is_trend_ride=False)
+
+        result = BacktestEngine._simulate_on_slice(
+            df, signals, 10_000.0, 0.10,
+            trailing_stop=True,
+            trailing_atr_mult=2.0,
+            trailing_trend_ride_atr_mult=3.0,
+        )
+        buys = [t for t in result["trades"] if t["side"] == "BUY"]
+        assert len(buys) == 1
+        buy = buys[0]
+        assert buy.get("signal_type") == "momentum", (
+            f"Expected signal_type='momentum', got {buy.get('signal_type')}"
+        )
+
+    def test_trend_ride_stop_wider_than_momentum_stop(self):
+        """For equal ATR, the trend_ride stop distance must be 50% wider than momentum."""
+        closes = [100.0] * 25 + [100.0]
+        df = _make_price_df(closes)
+
+        sig_tr  = self._make_signals_with_trend_ride(df, buy_idx=25, is_trend_ride=True)
+        sig_mom = self._make_signals_with_trend_ride(df, buy_idx=25, is_trend_ride=False)
+
+        res_tr = BacktestEngine._simulate_on_slice(
+            df, sig_tr, 10_000.0, 0.10,
+            trailing_stop=True, trailing_atr_mult=2.0, trailing_trend_ride_atr_mult=3.0,
+        )
+        res_mom = BacktestEngine._simulate_on_slice(
+            df, sig_mom, 10_000.0, 0.10,
+            trailing_stop=True, trailing_atr_mult=2.0, trailing_trend_ride_atr_mult=3.0,
+        )
+
+        tr_stop  = res_tr["trades"][0]["trail_stop_initial"]
+        mom_stop = res_mom["trades"][0]["trail_stop_initial"]
+        entry    = res_tr["trades"][0]["price"]
+
+        tr_dist  = entry - tr_stop
+        mom_dist = entry - mom_stop
+
+        assert tr_dist > mom_dist, (
+            f"trend_ride stop distance {tr_dist:.4f} must exceed momentum {mom_dist:.4f}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MaxDD alert threshold tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestMaxDdAlertThresholds:
+    """Verify Grafana alert YAML thresholds match the Phase 2 hardening spec."""
+
+    _YAML_PATH = os.path.join(
+        os.path.dirname(__file__),
+        "..", "..", "infra", "grafana", "provisioning", "alerting", "maxdd_alert.yaml",
+    )
+
+    def _load_yaml(self):
+        import yaml
+        with open(self._YAML_PATH) as f:
+            return yaml.safe_load(f)
+
+    def test_maxdd_warn_at_8pct(self):
+        """Warning rule must trigger at exactly 8% MaxDD."""
+        data = self._load_yaml()
+        warn_rule = next(
+            r for r in data["groups"][0]["rules"]
+            if "warn" in r["uid"].lower() or "warn" in r["title"].lower()
+        )
+        threshold_val = warn_rule["data"][-1]["model"]["conditions"][0]["evaluator"]["params"][0]
+        assert threshold_val == 8, (
+            f"MaxDD warning threshold should be 8, got {threshold_val}"
+        )
+
+    def test_maxdd_critical_at_12pct(self):
+        """Critical rule must trigger at exactly 12% MaxDD (tightened from 13%)."""
+        data = self._load_yaml()
+        crit_rule = next(
+            r for r in data["groups"][0]["rules"]
+            if "critical" in r["uid"].lower() or "critical" in r["title"].lower()
+        )
+        threshold_val = crit_rule["data"][-1]["model"]["conditions"][0]["evaluator"]["params"][0]
+        assert threshold_val == 12, (
+            f"MaxDD critical threshold should be 12, got {threshold_val}"
+        )

@@ -117,9 +117,9 @@ groups:
           severity: warning
         isPaused: false
 
-      # ── MaxDD > 13% critical (2% buffer before hard halt) ───────────────────
+      # ── MaxDD > 12% critical (3% buffer before hard halt) ───────────────────
       - uid: quantai-maxdd-critical-v1
-        title: "MaxDD > 13% Critical"
+        title: "MaxDD > 12% Critical"
         data:
           - refId: A
             datasourceUid: quantai_pg
@@ -170,7 +170,7 @@ groups:
               conditions:
                 - evaluator:
                     params:
-                      - 13
+                      - 12
                     type: gt
               refId: C
 
@@ -179,9 +179,9 @@ groups:
         execErrState: Error
         for: 5m
         annotations:
-          summary: "MaxDD > 13% CRITICAL — halt imminent"
+          summary: "MaxDD > 12% CRITICAL — halt imminent"
           description: >
-            Portfolio maximum drawdown has exceeded 13%.
+            Portfolio maximum drawdown has exceeded 12%.
             The 15% hard halt will trigger soon. Close positions or adjust risk parameters NOW.
         labels:
           team: quantai

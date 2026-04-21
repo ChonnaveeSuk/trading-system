@@ -47,7 +47,8 @@ class BacktestConfig:
     # Sharpe 1.61 vs 1.57), but BTC walk-forward pass rate regresses (6/14) due to
     # additional trades pushing low-trade windows into the strict Sharpe gate.
     trailing_stop: bool = False
-    trailing_stop_atr_mult: float = 2.0   # stop distance = mult × ATR(14)
+    trailing_stop_atr_mult: float = 2.0       # momentum entries: stop = mult × ATR(14)
+    trailing_stop_trend_ride_atr_mult: float = 3.0  # trend_ride entries: wider stop
 
 
 @dataclass

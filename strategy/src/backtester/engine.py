@@ -146,9 +146,14 @@ class BacktestEngine:
 
         # Pre-extract arrays: eliminates per-iteration pandas .loc overhead.
         # signals covers a subset of df (after MA warmup); align prices to it.
-        closes_run = df.loc[signals.index, "close"].to_numpy(dtype=float)
-        dirs_run   = signals["direction"].to_numpy()
-        scores_run = signals["score"].to_numpy(dtype=float)
+        closes_run        = df.loc[signals.index, "close"].to_numpy(dtype=float)
+        dirs_run          = signals["direction"].to_numpy()
+        scores_run        = signals["score"].to_numpy(dtype=float)
+        trend_ride_run    = (
+            signals["trend_ride"].to_numpy(dtype=bool)
+            if "trend_ride" in signals.columns
+            else np.zeros(len(signals), dtype=bool)
+        )
         atr_run_vals = (
             atr_series_run.reindex(signals.index).to_numpy(dtype=float)
             if atr_series_run is not None else None
@@ -187,8 +192,14 @@ class BacktestEngine:
                         v = atr_run_vals[i]
                         if not math.isnan(v) and v > 0:
                             atr_raw = v
+                    is_trend_ride_run = bool(trend_ride_run[i])
+                    atr_mult_run = (
+                        self.config.trailing_stop_trend_ride_atr_mult
+                        if is_trend_ride_run
+                        else self.config.trailing_stop_atr_mult
+                    )
                     trail_distance = (
-                        self.config.trailing_stop_atr_mult * atr_raw
+                        atr_mult_run * atr_raw
                         if not math.isnan(atr_raw)
                         else fill_price * 0.02
                     )
@@ -202,6 +213,7 @@ class BacktestEngine:
                         "commission": commission,
                         "score": score,
                         "trail_stop_initial": round(trail_stop, 5),
+                        "signal_type": "trend_ride" if is_trend_ride_run else "momentum",
                     })
 
             elif direction == "SELL" and position_qty > 0:
@@ -430,6 +442,7 @@ class BacktestEngine:
                 oos_df, oos_signals, starting_capital, position_pct,
                 trailing_stop=self.config.trailing_stop,
                 trailing_atr_mult=self.config.trailing_stop_atr_mult,
+                trailing_trend_ride_atr_mult=self.config.trailing_stop_trend_ride_atr_mult,
             )
 
             returns_arr = np.array(oos_result["daily_returns"])
@@ -509,6 +522,7 @@ class BacktestEngine:
         position_pct: float,
         trailing_stop: bool = False,
         trailing_atr_mult: float = 2.0,
+        trailing_trend_ride_atr_mult: float = 3.0,
     ) -> dict:
         """Simulate trades for a single OOS slice. Returns raw metrics dict.
 
@@ -535,11 +549,17 @@ class BacktestEngine:
         # Pre-extract arrays: eliminates per-iteration pandas .loc overhead.
         # Signals cover a subset of price_df (after MA warmup); align both to
         # price_df.index so every bar has a direction/score/close/atr value.
-        sig_dir   = signals["direction"].reindex(price_df.index, fill_value="HOLD")
-        sig_score = signals["score"].reindex(price_df.index, fill_value=0.0)
-        closes    = price_df["close"].to_numpy(dtype=float)
-        dirs      = sig_dir.to_numpy()
-        scores    = sig_score.to_numpy(dtype=float)
+        sig_dir        = signals["direction"].reindex(price_df.index, fill_value="HOLD")
+        sig_score      = signals["score"].reindex(price_df.index, fill_value=0.0)
+        sig_trend_ride = (
+            signals["trend_ride"].reindex(price_df.index, fill_value=False)
+            if "trend_ride" in signals.columns
+            else pd.Series(False, index=price_df.index)
+        )
+        closes         = price_df["close"].to_numpy(dtype=float)
+        dirs           = sig_dir.to_numpy()
+        scores         = sig_score.to_numpy(dtype=float)
+        trend_ride_arr = sig_trend_ride.to_numpy(dtype=bool)
         atr_vals  = (
             atr_series.reindex(price_df.index).to_numpy(dtype=float)
             if atr_series is not None else None
@@ -582,15 +602,19 @@ class BacktestEngine:
                     position_qty = qty
                     position_cost = qty * fill_price
 
-                    # Initialise trailing stop for this position
+                    # Initialise trailing stop for this position.
+                    # trend_ride entries use a wider stop (3.0× ATR) because
+                    # pullback entries are more susceptible to short-term volatility.
                     trail_high = fill_price
                     atr_raw = float("nan")
                     if atr_vals is not None:
                         v = atr_vals[i]
                         if not math.isnan(v) and v > 0:
                             atr_raw = v
+                    is_trend_ride = bool(trend_ride_arr[i])
+                    atr_mult = trailing_trend_ride_atr_mult if is_trend_ride else trailing_atr_mult
                     trail_distance = (
-                        trailing_atr_mult * atr_raw
+                        atr_mult * atr_raw
                         if not math.isnan(atr_raw)
                         else fill_price * 0.02   # 2% fallback when ATR unavailable
                     )
@@ -601,6 +625,7 @@ class BacktestEngine:
                         "qty": qty, "price": fill_price,
                         "commission": commission, "score": score,
                         "trail_stop_initial": round(trail_stop, 5),
+                        "signal_type": "trend_ride" if is_trend_ride else "momentum",
                     })
 
             elif direction == "SELL" and position_qty > 0:

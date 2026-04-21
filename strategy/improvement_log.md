@@ -2,6 +2,44 @@
 
 ---
 
+## Session 2026-04-21 — Phase 2 Hardening: Blacklist + Adaptive Stop + MaxDD Alerts (SHIPPED)
+
+### Findings from post_trend_ride_20260420.md
+
+Backtest with trend_ride on full 31-symbol universe:
+- Portfolio Sharpe 1.394 (vs 1.75 control without trend_ride): −0.36 degradation
+- Portfolio MaxDD 12.56% (vs 9.66% control): +2.90pp increase
+- Root cause: 93 of 191 trend_ride exits hit trailing stop → −283,108 THB; 2× ATR too tight for volatile pullback entries
+
+### Implementation
+
+**Symbol blacklist (`momentum.py`):**
+- `TREND_RIDE_EXCLUDED_SYMBOLS = frozenset({"AAPL", "URNM", "HL"})`
+- AAPL: WF Sharpe regression 1.96 → 0.204; single worst trade −14,974 THB (Feb-2026 gap-down)
+- URNM: 0/4 win rate; −7,307 THB across all entries
+- HL: WF Sharpe −1.047; sub-$10 silver miner overwhelmed by 2× ATR stop
+- Guard applied in both `generate_signal()` and `generate_signals_series()` with INFO log
+- `GOLD`, `KGC`, `AEM`, `GDX` and all other symbols unaffected
+
+**Adaptive trailing stop (`backtester/__init__.py` + `engine.py`):**
+- `BacktestConfig.trailing_stop_trend_ride_atr_mult: float = 3.0` (new field)
+- At BUY entry: reads `signals["trend_ride"]` column; uses 3.0× for trend_ride, 2.0× for momentum
+- `signal_type` logged in trade dict: `"trend_ride"` or `"momentum"`
+- Applied in both `run()` and `_simulate_on_slice()`
+
+**MaxDD alerts (`infra/grafana/provisioning/alerting/maxdd_alert.yaml`):**
+- Warning: 8% (unchanged — was already at 8%)
+- Critical: 13% → **12%** (3pp buffer before 15% hard halt; was 2pp)
+
+### Test Count After Session
+| Suite | Before | After | New tests |
+|-------|--------|-------|-----------|
+| Rust  | 46     | 46    | 0 |
+| Python| 166    | 175   | +9 (blacklist×4, adaptive stop×3, MaxDD alert×2) |
+| **Total** | **212** | **221** | **+9** |
+
+---
+
 ## Session 2026-04-20 — trend_ride Exit Gate (SHIPPED)
 
 ### Audit Result: Hypothesis CONFIRMED
