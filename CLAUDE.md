@@ -8,7 +8,7 @@
 **Last updated:** 2026-04-21 (test counts synced: 138 → 221; refs fba06bd)
 **Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
-**Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 symbols
+**Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 seeded / 29 live trading (BNB-USD, GBP-USD excluded — not on Alpaca)
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
 
 **Active plugins:** rust-analyzer-lsp, pyright-lsp, context7, code-review
