@@ -5,7 +5,7 @@
 
 **Phase:** 5 — 90-day paper trading IN PROGRESS (started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-15 (WSL machine retired — GCP runs autonomously)
+**Last updated:** 2026-04-21 (test counts synced: 138 → 221; refs fba06bd)
 **Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
 **Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 symbols
@@ -101,7 +101,7 @@
   Verified end-to-end: 2026-03-28.sql.gz (55.5 KiB) confirmed in GCS
   **Primary scheduler: GCP Cloud Run Job `quantai-backup`** (Cloud Scheduler 02:00 UTC daily)
   WSL fallback crontab: `0 2 * * * /home/chonsuk/trading-system/scripts/backup_postgres.sh >> /var/log/quantai-backup.log 2>&1`
-- [x] 92 Python tests passing (46 Rust + 92 Python = 138 total)
+- [x] 175 Python tests passing (46 Rust + 175 Python = 221 total)
 - [ ] 90-day live paper trading gate: Sharpe > 1.0, MaxDD < 15% (IN PROGRESS — started 2026-04-07)
 
 ### ✅ Phase 4 Prep (DONE — 2026-04-03)
@@ -228,11 +228,11 @@ docker compose ps   # postgres + redis + grafana should show "healthy"
 # 2. Rust build + tests (requires PROTOC and DATABASE_URL)
 export PROTOC=/home/chonsuk/.local/bin/protoc
 export DATABASE_URL=postgres://quantai:quantai_dev_2026@localhost:5432/quantai
-cd core && cargo test        # Must show 46 passed (138 total with Python)
+cd core && cargo test        # Must show 46 passed (221 total with Python)
 cd core && cargo clippy -- -D warnings   # Zero warnings
 
 # 3. Python tests
-cd strategy && python3 -m pytest tests/ -q   # Must show 92 passed (138 total with Rust)
+cd strategy && python3 -m pytest tests/ -q   # Must show 175 passed (221 total with Rust)
 
 # 4. Alpaca pre-flight
 python3 scripts/test_alpaca_connection.py    # must exit 0 (run during market hours for full fill test)

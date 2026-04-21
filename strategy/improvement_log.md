@@ -38,6 +38,15 @@ Backtest with trend_ride on full 31-symbol universe:
 | Python| 166    | 175   | +9 (blacklist×4, adaptive stop×3, MaxDD alert×2) |
 | **Total** | **212** | **221** | **+9** |
 
+### Production Verification — 2026-04-21 03:14 UTC (execution 8z87s)
+- Blacklist guard fires correctly on AAPL/URNM/HL in walk-forward
+- No exceptions, Daily run complete ✓
+
+### ⚠️ Known Issue: AAPL momentum_v1 WF Sharpe=0.41 [FAIL]
+- Monitoring 3 cron runs before decision (Phase 2.1 eval)
+- Regression: AAPL trend_ride WF 1.96 → 0.204 drove upstream Sharpe collapse
+- Action: observe; if still failing after 3 runs, consider deeper AAPL exclusion or momentum param tweak
+
 ---
 
 ## Session 2026-04-20 — trend_ride Exit Gate (SHIPPED)
