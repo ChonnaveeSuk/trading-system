@@ -257,6 +257,7 @@ class AlpacaDirectClient:
         stop_loss: Decimal,
         signal_score: float,
         strategy_id: str,
+        signal_type: str = "momentum",
     ) -> None:
         """INSERT into orders table with status=SUBMITTED.
 
@@ -280,9 +281,9 @@ class AlpacaDirectClient:
                         INSERT INTO orders (
                             client_order_id, broker_order_id, symbol, side,
                             order_type, quantity, stop_loss, signal_score,
-                            strategy_id, status, created_at, updated_at
+                            strategy_id, signal_type, status, created_at, updated_at
                         ) VALUES (%s, %s, %s, %s, 'MARKET', %s, %s, %s, %s,
-                                  'SUBMITTED', %s, %s)
+                                  %s, 'SUBMITTED', %s, %s)
                         ON CONFLICT (client_order_id) DO NOTHING
                         """,
                         (
@@ -294,14 +295,15 @@ class AlpacaDirectClient:
                             str(stop_loss),
                             signal_score,
                             strategy_id,
+                            signal_type,
                             now,
                             now,
                         ),
                     )
                 conn.commit()
                 logger.info(
-                    "Order recorded: %s %s %s qty=%s (status=SUBMITTED)",
-                    side, symbol, client_order_id[:8], qty,
+                    "Order recorded: %s %s %s qty=%s signal_type=%s (status=SUBMITTED)",
+                    side, symbol, client_order_id[:12], qty, signal_type,
                 )
             except Exception as e:
                 conn.rollback()
@@ -467,7 +469,16 @@ class AlpacaDirectClient:
 
         # ── Direction-specific logic ──────────────────────────────────────────
 
-        client_order_id = f"quantai-{uuid.uuid4()}"
+        features = signal.features or {}
+        if not features and signal.direction != Direction.HOLD:
+            logger.warning(
+                "%s: signal has no features dict — defaulting signal_type to 'momentum'",
+                signal.symbol,
+            )
+        is_trend_ride = bool(features.get("trend_ride", False))
+        signal_type = "trend_ride" if is_trend_ride else "momentum"
+        signal_type_code = "tr" if is_trend_ride else "mom"
+        client_order_id = f"quantai-{signal_type_code}-{uuid.uuid4()}"
         side = signal.direction.value.lower()  # "buy" or "sell"
 
         if signal.direction == Direction.BUY:
@@ -562,6 +573,7 @@ class AlpacaDirectClient:
             stop_loss=signal.suggested_stop_loss,
             signal_score=signal.score,
             strategy_id=signal.strategy_id,
+            signal_type=signal_type,
         )
 
         return BridgeResponse(

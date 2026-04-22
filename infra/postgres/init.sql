@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_ohlcv_symbol_time ON ohlcv (symbol, timestamp DES
 
 -- ── Orders ────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS orders (
-    client_order_id  UUID           PRIMARY KEY,
+    client_order_id  VARCHAR(100)   PRIMARY KEY,  -- "quantai-{type}-{uuid}" encoded ID
     broker_order_id  VARCHAR(100),
     symbol           VARCHAR(20)    NOT NULL,
     side             VARCHAR(4)     NOT NULL CHECK (side IN ('BUY', 'SELL')),
@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS orders (
     stop_loss        NUMERIC(18,8),              -- Required by risk engine
     signal_score     DOUBLE PRECISION,           -- [0.0, 1.0]
     strategy_id      VARCHAR(100),
+    signal_type      VARCHAR(32)    NOT NULL DEFAULT 'momentum',  -- 'momentum' | 'trend_ride'
+    exit_reason      VARCHAR(64),
     status           VARCHAR(20)    NOT NULL DEFAULT 'PENDING'
                          CHECK (status IN ('PENDING','SUBMITTED','PARTIALLY_FILLED',
                                            'FILLED','CANCELLED','REJECTED')),
@@ -49,10 +51,11 @@ CREATE TABLE IF NOT EXISTS orders (
     updated_at       TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_symbol     ON orders (symbol);
-CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders (status) WHERE status NOT IN ('FILLED','CANCELLED','REJECTED');
-CREATE INDEX IF NOT EXISTS idx_orders_strategy   ON orders (strategy_id);
-CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_symbol      ON orders (symbol);
+CREATE INDEX IF NOT EXISTS idx_orders_status      ON orders (status) WHERE status NOT IN ('FILLED','CANCELLED','REJECTED');
+CREATE INDEX IF NOT EXISTS idx_orders_strategy    ON orders (strategy_id);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at  ON orders (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_signal_type ON orders (signal_type);
 
 -- Auto-update updated_at on any row change
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -66,7 +69,7 @@ CREATE TRIGGER trg_orders_updated_at
 -- ── Fills ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS fills (
     fill_id          UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
-    client_order_id  UUID           NOT NULL REFERENCES orders(client_order_id),
+    client_order_id  VARCHAR(100)   NOT NULL REFERENCES orders(client_order_id),
     broker_order_id  VARCHAR(100),
     symbol           VARCHAR(20)    NOT NULL,
     side             VARCHAR(4)     NOT NULL CHECK (side IN ('BUY', 'SELL')),
@@ -93,9 +96,12 @@ CREATE TABLE IF NOT EXISTS positions (
     realized_pnl     NUMERIC(18,8)  NOT NULL DEFAULT 0,
     unrealized_pnl   NUMERIC(18,8)  NOT NULL DEFAULT 0,
     stop_loss        NUMERIC(18,8),
+    signal_type      VARCHAR(32)    NOT NULL DEFAULT 'momentum',  -- 'momentum' | 'trend_ride'
     opened_at        TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_positions_signal_type ON positions (signal_type);
 
 CREATE TRIGGER trg_positions_updated_at
     BEFORE UPDATE ON positions
