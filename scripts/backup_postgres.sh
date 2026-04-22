@@ -36,20 +36,23 @@ _SQL_INSTANCE="quantai-postgres"
 #   postgresql://user:pass@host:port/db
 # Falls back to individual POSTGRES_* env vars for local Docker dev.
 if [[ -n "${DATABASE_URL:-}" ]]; then
-    eval "$(python3 - <<'PYEOF'
-import sys, urllib.parse
-url = urllib.parse.urlparse("${DATABASE_URL}")
+    # Pass DATABASE_URL via env (never inline via shell expansion in heredoc) +
+    # shell-safe quoting. Previous version leaked full URL (incl. password) to
+    # PGDATABASE when parser silently returned the literal "${DATABASE_URL}".
+    eval "$(DATABASE_URL="$DATABASE_URL" python3 - <<'PYEOF'
+import os, shlex, urllib.parse
+url = urllib.parse.urlparse(os.environ.get("DATABASE_URL", ""))
 params = dict(urllib.parse.parse_qsl(url.query))
 host = params.get("host") or url.hostname or "localhost"
 port = url.port or 5432
 user = url.username or "quantai"
 password = urllib.parse.unquote(url.password or "")
 db   = url.path.lstrip("/") or "quantai"
-print(f'PGHOST="{host}"')
-print(f'PGPORT="{port}"')
-print(f'PGUSER="{user}"')
-print(f'PGPASSWORD="{password}"')
-print(f'PGDATABASE="{db}"')
+print(f"PGHOST={shlex.quote(host)}")
+print(f"PGPORT={shlex.quote(str(port))}")
+print(f"PGUSER={shlex.quote(user)}")
+print(f"PGPASSWORD={shlex.quote(password)}")
+print(f"PGDATABASE={shlex.quote(db)}")
 PYEOF
     )"
 else

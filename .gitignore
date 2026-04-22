@@ -52,4 +52,6 @@ logs/
 *.csv
 *.parquet
 *.pkl
-data/
+/data/
+!strategy/src/data/
+!strategy/src/data/**
