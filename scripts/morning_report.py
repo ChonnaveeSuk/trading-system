@@ -44,6 +44,42 @@ _REGIME_EMOJI = {"BULL": "\U0001f7e2", "NEUTRAL": "\U0001f7e1", "BEAR": "\U0001f
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+
+# ── Sector mapping ────────────────────────────────────────────────────────────
+# Maps symbol -> broad sector/theme for concentration analysis.
+# Keep in sync with trading universe (strategy/src/data/alpaca_fetcher.py).
+SECTOR_MAP: dict = {
+    # Precious metals (gold + silver ETFs + miners)
+    "GLD": "precious_metals", "IAU": "precious_metals",
+    "AEM": "precious_metals", "KGC": "precious_metals", "AGI": "precious_metals",
+    "WPM": "precious_metals", "GOLD": "precious_metals", "NEM": "precious_metals",
+    "CDE": "precious_metals",
+    "SLV": "precious_metals", "SILJ": "precious_metals", "PAAS": "precious_metals",
+    "HL": "precious_metals", "GDX": "precious_metals", "GDXJ": "precious_metals",
+    "RING": "precious_metals",
+    # Uranium
+    "URA": "uranium", "URNM": "uranium",
+    # Industrial / rare-earth
+    "SCCO": "industrial_metals", "MP": "industrial_metals",
+    # Broad commodities
+    "DBC": "commodities_broad",
+    # Bonds
+    "TLT": "bonds",
+    # Broad equity
+    "SPY": "equity_broad", "QQQ": "equity_broad", "IWM": "equity_broad",
+    "XLK": "equity_tech", "EEM": "equity_emerging",
+    # Single-name equity
+    "AAPL": "equity_single",
+    # Crypto & FX (not on Alpaca but in universe)
+    "BTC-USD": "crypto", "BNB-USD": "crypto",
+    "GBP-USD": "forex", "EUR-USD": "forex",
+}
+
+
+def _sector_for(symbol: str) -> str:
+    return SECTOR_MAP.get(symbol, "other")
+
+
 def _connect():
     import psycopg2
     return psycopg2.connect(_DB_URL)
@@ -246,6 +282,56 @@ def _query_ab_attribution(yesterday: date) -> dict:
     return result
 
 
+def _query_sector_concentration() -> dict:
+    """Return sector-level exposure from current open positions.
+
+    Returns:
+        {
+          "by_sector": {sector: {"count", "notional", "unrealized"}, ...},
+          "total_notional": float,
+          "largest_sector": (name, pct) | None,
+        }
+    Notional = |quantity * average_cost|. Always non-fatal on DB error.
+    """
+    result: dict = {"by_sector": {}, "total_notional": 0.0, "largest_sector": None}
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT symbol, quantity, average_cost, "
+                    "COALESCE(unrealized_pnl, 0) "
+                    "FROM positions WHERE quantity != 0"
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("Sector concentration query failed: %s", e)
+        return result
+
+    total = 0.0
+    for sym, qty, avg_cost, unreal in rows:
+        qty = float(qty or 0)
+        avg_cost = float(avg_cost or 0)
+        unreal = float(unreal or 0)
+        notional = abs(qty * avg_cost)
+        sector = _sector_for(sym)
+        entry = result["by_sector"].setdefault(
+            sector, {"count": 0, "notional": 0.0, "unrealized": 0.0}
+        )
+        entry["count"] += 1
+        entry["notional"] += notional
+        entry["unrealized"] += unreal
+        total += notional
+
+    result["total_notional"] = total
+    if total > 0 and result["by_sector"]:
+        largest = max(result["by_sector"].items(), key=lambda kv: kv[1]["notional"])
+        result["largest_sector"] = (largest[0], largest[1]["notional"] / total * 100)
+    return result
+
+
 def _load_signals() -> dict:
     try:
         with open(_SIGNALS_FILE) as f:
@@ -347,6 +433,26 @@ def build_report() -> tuple[str, str]:
         )
     else:
         ab_section = None
+    # ── Sector Concentration (skip if no positions) ───────────────────────────
+    sector_data = _query_sector_concentration()
+    if sector_data["by_sector"]:
+        lines = ["\U0001f3af Sector Exposure"]
+        by_s = sector_data["by_sector"]
+        total = sector_data["total_notional"] or 1.0
+        for sec, info in sorted(by_s.items(), key=lambda kv: -kv[1]["notional"]):
+            pct = info["notional"] / total * 100
+            lines.append(
+                f"  {sec:<20} {info['count']:>2}pos  "
+                f"{pct:>5.1f}%  {_fmt_pnl(info['unrealized'])}"
+            )
+        if sector_data["largest_sector"]:
+            name, pct = sector_data["largest_sector"]
+            if pct > 50:
+                lines.append(f"  \u26a0 HIGH CONCENTRATION: {name} {pct:.0f}% of book")
+        sector_section = "\n".join(lines)
+    else:
+        sector_section = None
+
 
     # ── P&L ──────────────────────────────────────────────────────────────────
     today_pnl = pnl_data.get("today_pnl", 0.0)
@@ -410,6 +516,8 @@ def build_report() -> tuple[str, str]:
     ]
     if ab_section:
         sections.append(ab_section)
+    if sector_section:
+        sections.append(sector_section)
     sections.extend([pnl_section, gate_section, next_section])
     message = "\n\n".join(sections)
 
