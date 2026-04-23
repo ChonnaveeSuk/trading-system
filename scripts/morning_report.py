@@ -198,6 +198,54 @@ def _query_gate() -> dict:
     return {"days_elapsed": 1, "total_trades": 0, "max_dd_pct": 0.0, "sharpe": None}
 
 
+def _query_ab_attribution(yesterday: date) -> dict:
+    """Return per-signal-type fill counts + position stats.
+
+    Returns:
+        {'momentum':   {'fills', 'positions', 'unrealized'},
+         'trend_ride': {'fills', 'positions', 'unrealized'}}
+
+    Always non-fatal: returns zero-filled dict on DB error.
+    """
+    result = {
+        "momentum":   {"fills": 0, "positions": 0, "unrealized": 0.0},
+        "trend_ride": {"fills": 0, "positions": 0, "unrealized": 0.0},
+    }
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                # Yesterday's fills, joined with orders for signal_type
+                ystart = datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc)
+                yend = ystart + timedelta(days=1)
+                cur.execute(
+                    "SELECT o.signal_type, COUNT(*) "
+                    "FROM fills f JOIN orders o USING (client_order_id) "
+                    "WHERE f.timestamp >= %s AND f.timestamp < %s "
+                    "GROUP BY o.signal_type",
+                    (ystart, yend),
+                )
+                for st, cnt in cur.fetchall():
+                    if st in result:
+                        result[st]["fills"] = int(cnt)
+
+                # Active positions (qty != 0)
+                cur.execute(
+                    "SELECT signal_type, COUNT(*), COALESCE(SUM(unrealized_pnl), 0) "
+                    "FROM positions WHERE quantity != 0 "
+                    "GROUP BY signal_type"
+                )
+                for st, cnt, unreal in cur.fetchall():
+                    if st in result:
+                        result[st]["positions"] = int(cnt)
+                        result[st]["unrealized"] = float(unreal)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("A/B attribution query failed: %s", e)
+    return result
+
+
 def _load_signals() -> dict:
     try:
         with open(_SIGNALS_FILE) as f:
@@ -285,6 +333,21 @@ def build_report() -> tuple[str, str]:
             sig_line += f"\n{blocked}"
         signals_section = f"\U0001f4c8 Signals ({yesterday_label})\n{sig_line}"
 
+    # ── A/B Attribution (skip if no activity) ────────────────────────────────
+    ab_data = _query_ab_attribution(yesterday)
+    mom = ab_data["momentum"]
+    tr  = ab_data["trend_ride"]
+    ab_total = mom["fills"] + tr["fills"] + mom["positions"] + tr["positions"]
+    if ab_total > 0:
+        ab_section = (
+            f"\U0001f9ea A/B Attribution\n"
+            f"Yesterday fills: Mom {mom['fills']} | TR {tr['fills']}\n"
+            f"Active pos:      Mom {mom['positions']} | TR {tr['positions']}\n"
+            f"Unrealized:      Mom {_fmt_pnl(mom['unrealized'])} | TR {_fmt_pnl(tr['unrealized'])}"
+        )
+    else:
+        ab_section = None
+
     # ── P&L ──────────────────────────────────────────────────────────────────
     today_pnl = pnl_data.get("today_pnl", 0.0)
     week_pnl = pnl_data.get("week_pnl", 0.0)
@@ -340,14 +403,15 @@ def build_report() -> tuple[str, str]:
     else:
         level = "SUMMARY"
 
-    message = "\n\n".join([
+    sections = [
         f"QuantAI Morning Report \u2014 {today.isoformat()}",
         regime_section,
         signals_section,
-        pnl_section,
-        gate_section,
-        next_section,
-    ])
+    ]
+    if ab_section:
+        sections.append(ab_section)
+    sections.extend([pnl_section, gate_section, next_section])
+    message = "\n\n".join(sections)
 
     return message, level
 

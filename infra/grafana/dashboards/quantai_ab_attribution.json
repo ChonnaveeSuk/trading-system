@@ -1,0 +1,442 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "A/B attribution: momentum vs trend_ride performance. Data starts 2026-04-22 after migration 003.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "📊 Today's Activity",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 101,
+      "type": "stat",
+      "title": "Orders Today — Momentum",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*)::bigint FROM orders WHERE created_at >= CURRENT_DATE AND signal_type='momentum'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 102,
+      "type": "stat",
+      "title": "Orders Today — Trend-Ride",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*)::bigint FROM orders WHERE created_at >= CURRENT_DATE AND signal_type='trend_ride'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 103,
+      "type": "stat",
+      "title": "Fills Today — Momentum",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*)::bigint FROM fills f JOIN orders o USING (client_order_id) WHERE f.timestamp >= CURRENT_DATE AND o.signal_type='momentum'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 104,
+      "type": "stat",
+      "title": "Fills Today — Trend-Ride",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*)::bigint FROM fills f JOIN orders o USING (client_order_id) WHERE f.timestamp >= CURRENT_DATE AND o.signal_type='trend_ride'",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "📈 Cumulative Performance (since A/B deploy 2026-04-22)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "panels": []
+    },
+    {
+      "id": 201,
+      "type": "timeseries",
+      "title": "Cumulative Realized P&L by signal_type",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "\nWITH ranked AS (\n  SELECT f.symbol, o.signal_type, f.side, f.fill_price, f.filled_quantity, f.timestamp,\n         ROW_NUMBER() OVER (PARTITION BY f.symbol, o.signal_type, f.side ORDER BY f.timestamp) AS rn\n  FROM fills f JOIN orders o ON f.client_order_id = o.client_order_id\n),\npairs AS (\n  SELECT b.signal_type, s.timestamp AS sell_time,\n         (s.fill_price - b.fill_price) * LEAST(b.filled_quantity, s.filled_quantity) AS pnl\n  FROM ranked b JOIN ranked s USING (symbol, signal_type, rn)\n  WHERE b.side='BUY' AND s.side='SELL'\n),\ndaily AS (\n  SELECT date_trunc('day', sell_time)::timestamptz AS time,\n         COALESCE(SUM(pnl) FILTER (WHERE signal_type='momentum'),  0)::float8 AS mom,\n         COALESCE(SUM(pnl) FILTER (WHERE signal_type='trend_ride'), 0)::float8 AS tr\n  FROM pairs\n  GROUP BY 1\n)\nSELECT time,\n       SUM(mom) OVER (ORDER BY time) AS \"Momentum\",\n       SUM(tr)  OVER (ORDER BY time) AS \"Trend-Ride\"\nFROM daily ORDER BY time\n",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        }
+      }
+    },
+    {
+      "id": 202,
+      "type": "timeseries",
+      "title": "Daily Trade Count by signal_type",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "\nSELECT date_trunc('day', f.timestamp)::timestamptz AS time,\n       COUNT(*) FILTER (WHERE o.signal_type='momentum')::bigint  AS \"Momentum\",\n       COUNT(*) FILTER (WHERE o.signal_type='trend_ride')::bigint AS \"Trend-Ride\"\nFROM fills f JOIN orders o USING (client_order_id)\nGROUP BY 1 ORDER BY 1\n",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        }
+      }
+    },
+    {
+      "id": 203,
+      "type": "barchart",
+      "title": "Win Rate by signal_type (closed trades)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "\nWITH ranked AS (\n  SELECT f.symbol, o.signal_type, f.side, f.fill_price,\n         ROW_NUMBER() OVER (PARTITION BY f.symbol, o.signal_type, f.side ORDER BY f.timestamp) AS rn\n  FROM fills f JOIN orders o ON f.client_order_id = o.client_order_id\n),\npairs AS (\n  SELECT b.signal_type,\n         CASE WHEN s.fill_price > b.fill_price THEN 1 ELSE 0 END AS win\n  FROM ranked b JOIN ranked s USING (symbol, signal_type, rn)\n  WHERE b.side='BUY' AND s.side='SELL'\n)\nSELECT signal_type AS \"Strategy\",\n       ROUND(100.0 * SUM(win)::numeric / NULLIF(COUNT(*), 0), 1)::float8 AS \"Win Rate %\",\n       COUNT(*)::bigint AS \"Trades\"\nFROM pairs GROUP BY signal_type ORDER BY signal_type\n",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "xField": "Strategy",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "green",
+                "value": 55
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "🎯 Current State",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "panels": []
+    },
+    {
+      "id": 301,
+      "type": "table",
+      "title": "Active Positions by signal_type (qty ≠ 0)",
+      "datasource": {
+        "type": "postgres",
+        "uid": "quantai_pg"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "\nSELECT signal_type AS \"Strategy\",\n       symbol AS \"Symbol\",\n       ROUND(quantity::numeric, 4)::float8 AS \"Quantity\",\n       ROUND(average_cost::numeric, 4)::float8 AS \"Avg Cost\",\n       ROUND(unrealized_pnl::numeric, 2)::float8 AS \"Unrealized P&L\",\n       stop_loss::float8 AS \"Stop Loss\",\n       opened_at AS \"Opened\"\nFROM positions\nWHERE quantity != 0\nORDER BY signal_type, opened_at DESC\n",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        }
+      }
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "quantai",
+    "attribution",
+    "a-b"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "Asia/Bangkok",
+  "title": "QuantAI A/B Attribution",
+  "uid": "quantai-ab-attribution",
+  "version": 1,
+  "weekStart": ""
+}
