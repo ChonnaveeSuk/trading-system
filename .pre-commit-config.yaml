@@ -17,7 +17,7 @@ repos:
   # Secret detection — primary defense against password / API-key leaks
   # -------------------------------------------------------------------
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+    rev: v8.30.0
     hooks:
       - id: gitleaks
         name: gitleaks (secret scan)
@@ -26,7 +26,7 @@ repos:
   # General hygiene
   # -------------------------------------------------------------------
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
         exclude: ^.*\.md$
@@ -44,7 +44,7 @@ repos:
   # Remove --exit-zero once the codebase is clean to make it blocking.
   # -------------------------------------------------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.0
+    rev: v0.15.11
     hooks:
       - id: ruff
         args: [--exit-zero]
