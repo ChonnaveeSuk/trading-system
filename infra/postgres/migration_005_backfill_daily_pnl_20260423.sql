@@ -42,7 +42,7 @@ BEGIN;
 UPDATE daily_pnl
 SET
     starting_value = 97401.99,
-    ending_value   = 99457.01,
+    ending_value   = 96858.99,  -- = starting_value + unrealized
     realized_pnl   = 0.00,
     unrealized_pnl = -543.00,   -- reconstructed from equity delta
     num_trades     = 10,
