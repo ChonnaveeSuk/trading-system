@@ -5,7 +5,7 @@
 
 **Phase:** 5 — 90-day paper trading IN PROGRESS (started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-21 (test counts synced: 138 → 221; refs fba06bd)
+**Last updated:** 2026-04-23 (Task 11-14: pre-commit + gitleaks; refs a2e759a)
 **Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
 **Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 seeded / 29 live trading (BNB-USD, GBP-USD excluded — not on Alpaca)
@@ -616,3 +616,56 @@ Refresh: `docker compose restart grafana` (picks up dashboard JSON changes autom
 - **No root/sudo access in this WSL environment.** Everything installed user-local or via Rust/Python.
 - **GCP project ID is `quantai-trading-paper`, not `quantai-trading`.** The shorter ID was already taken globally. All references updated.
 - **GCP runs in local-only mode if `GCP_PROJECT_ID` is unset.** Engine warns but does not fail (ADR-002).
+
+## Pre-commit Hooks & Secret Scanning
+
+Added 2026-04-23 (Task 11–14). Prevents credential leaks at local
+commit time and at CI push/PR time.
+
+### Fresh-clone setup (one-time per clone)
+
+```bash
+pip install --user --break-system-packages pre-commit
+export PATH="$HOME/.local/bin:$PATH"   # or persist in ~/.bashrc
+pre-commit install                     # installs .git/hooks/pre-commit
+pre-commit run --all-files             # baseline (first run: 1–3 min)
+```
+
+### Hooks configured
+
+| Hook | Purpose | Blocking? |
+|---|---|---|
+| gitleaks | Secret / API-key detection (primary defense) | Yes |
+| trailing-whitespace, end-of-file-fixer | Hygiene, auto-fix | Yes (auto-fixes) |
+| check-yaml, check-json | Syntax validation | Yes |
+| check-added-large-files (maxkb=500) | Prevent binary / data blobs | Yes |
+| check-merge-conflict, detect-private-key | Extra safety | Yes |
+| ruff | Python lint (warn via --exit-zero) | No (rollout mode) |
+
+Config: `.pre-commit-config.yaml`, `.gitleaks.toml`.
+Server-side: `.github/workflows/security-scan.yml` runs gitleaks
+on every PR + push to master.
+
+### Bypass policy
+
+`git commit --no-verify` is permitted ONLY for genuine emergencies
+(outage hotfix, tool-outage false positive). Every bypassed commit
+MUST include an `Emergency-bypass:` line in the body explaining the
+reason and the follow-up cleanup. The CI `security-scan` still
+runs on push, so local bypass does not bypass the full defense.
+
+### Allowlist (Task 6 follow-up)
+
+`quantai_dev_2026` is allowlisted in `.gitleaks.toml` because it
+appears as a hardcoded dev-fallback password in **25 files / 31
+occurrences** (scripts, strategy, Rust OMS, tests, docs). Task 6
+will replace these with fail-loud env-var reads; once merged,
+delete the allowlist block from `.gitleaks.toml`.
+
+### Updating hook revs
+
+```bash
+pre-commit autoupdate
+pre-commit run --all-files
+git commit -m "chore: pre-commit autoupdate"
+```
