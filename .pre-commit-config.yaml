@@ -1,0 +1,54 @@
+# QuantAI pre-commit configuration
+#
+# Install once per clone:
+#   pip install --user pre-commit
+#   ~/.local/bin/pre-commit install
+#
+# Run manually across the repo:
+#   ~/.local/bin/pre-commit run --all-files
+#
+# Bypass (emergency only — document reason in the commit message):
+#   git commit --no-verify
+#
+# Pinned revs are updated by: ~/.local/bin/pre-commit autoupdate
+
+repos:
+  # -------------------------------------------------------------------
+  # Secret detection — primary defense against password / API-key leaks
+  # -------------------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret scan)
+
+  # -------------------------------------------------------------------
+  # General hygiene
+  # -------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^.*\.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # -------------------------------------------------------------------
+  # Python linting — warning mode for rollout (--exit-zero)
+  # Remove --exit-zero once the codebase is clean to make it blocking.
+  # -------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.0
+    hooks:
+      - id: ruff
+        args: [--exit-zero]
+        files: ^(strategy|scripts)/.*\.py$
+
+default_language_version:
+  python: python3

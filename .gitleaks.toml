@@ -1,0 +1,25 @@
+# QuantAI gitleaks configuration
+#
+# Inherits all default gitleaks rules and adds a project allowlist.
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+#
+# Read automatically by both:
+#   - the local pre-commit hook (gitleaks/gitleaks @ v8.18.4)
+#   - the server-side GitHub Actions workflow (.github/workflows/security-scan.yml)
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Project allowlist
+# -----------------------------------------------------------------------------
+# Stop-gap for the hardcoded dev-fallback password. Task 6 will remove the
+# fallback from all 16 files; once that is merged, delete this block and
+# re-run `pre-commit run --all-files` to confirm it still passes.
+# -----------------------------------------------------------------------------
+
+[[allowlists]]
+description = "Dev fallback password — tracked as Task 6 tech debt"
+regexes = [
+    '''quantai_dev_2026''',
+]
