@@ -166,6 +166,9 @@ class AlpacaDirectClient:
         self._endpoint: str = ""
         self._session: Optional[requests.Session] = None
         self._equity: Optional[Decimal] = None
+        # Task 15: track symbols submitted this session — defense-in-depth against
+        # duplicate submissions within a single run_live() invocation.
+        self._submitted_symbols: set[str] = set()
 
     # ── Connection management ─────────────────────────────────────────────────
 
@@ -178,6 +181,7 @@ class AlpacaDirectClient:
             "APCA-API-SECRET-KEY": secret_key,
             "Content-Type": "application/json",
         })
+        self._submitted_symbols = set()  # reset on reconnect
         logger.info("AlpacaDirectClient: connected to %s", endpoint)
 
     def disconnect(self) -> None:
@@ -211,6 +215,22 @@ class AlpacaDirectClient:
         resp.raise_for_status()
         positions = resp.json()
         return {p["symbol"]: p for p in positions}
+
+    def _get_open_orders(self, alpaca_symbol: str) -> list[dict]:
+        """Return pending/queued orders for alpaca_symbol via GET /orders.
+
+        Used as a cross-invocation dedup guard: a pending order that was
+        submitted in a previous Cloud Run invocation will not appear in
+        _get_positions() (which returns only filled positions), but will
+        appear here.  See Task 15 (KGC double-submission bug).
+        """
+        resp = self._sess().get(
+            f"{self._endpoint}/orders",
+            params={"status": "open", "symbols": alpaca_symbol},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     def _get_clock(self) -> dict:
         resp = self._sess().get(f"{self._endpoint}/clock", timeout=10)
@@ -482,6 +502,7 @@ class AlpacaDirectClient:
         side = signal.direction.value.lower()  # "buy" or "sell"
 
         if signal.direction == Direction.BUY:
+            # Guard 1: already have a filled position.
             if alpaca_symbol in positions:
                 logger.info(
                     "%s: already long %s shares — skipping BUY",
@@ -493,6 +514,51 @@ class AlpacaDirectClient:
                     order_id="",
                     status="SKIPPED",
                     message="already long position",
+                )
+
+            # Guard 2 (Task 15): session-level dedup — prevents a second BUY for
+            # the same symbol within the same run_live() invocation.  Catches the
+            # case where the symbol loop somehow reaches the same ticker twice.
+            if alpaca_symbol in self._submitted_symbols:
+                logger.warning(
+                    "%s: duplicate BUY within same session — skipping (seen_symbols guard)",
+                    signal.symbol,
+                )
+                return BridgeResponse(
+                    accepted=False,
+                    order_id="",
+                    status="SKIPPED",
+                    message="duplicate BUY within session",
+                )
+
+            # Guard 3 (Task 15): cross-invocation dedup — check for a pending order
+            # submitted in a previous Cloud Run invocation that has not yet been
+            # filled.  Such orders are invisible to _get_positions() but visible
+            # via GET /orders?status=open.  Non-fatal: if the API call fails we
+            # log a warning and proceed rather than blocking legitimate trades.
+            try:
+                open_orders = self._get_open_orders(alpaca_symbol)
+                time.sleep(_API_SLEEP_S)
+                pending_buys = [o for o in open_orders if o.get("side") == "buy"]
+                if pending_buys:
+                    logger.warning(
+                        "%s: %d pending BUY order(s) already exist — skipping "
+                        "(cross-invocation dedup guard)",
+                        signal.symbol, len(pending_buys),
+                    )
+                    return BridgeResponse(
+                        accepted=False,
+                        order_id="",
+                        status="SKIPPED",
+                        message=(
+                            f"pending BUY order already exists "
+                            f"({len(pending_buys)} open order(s))"
+                        ),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "%s: could not check open orders (non-fatal, proceeding): %s",
+                    signal.symbol, e,
                 )
 
             logger.info(
@@ -561,6 +627,9 @@ class AlpacaDirectClient:
             "Alpaca order submitted: %s %s  broker_id=%s  status=%s",
             side.upper(), signal.symbol, broker_order_id, alpaca_status,
         )
+
+        # Task 15: mark as submitted so session-level guard catches any retry
+        self._submitted_symbols.add(alpaca_symbol)
 
         # ── Record in PostgreSQL ──────────────────────────────────────────────
 

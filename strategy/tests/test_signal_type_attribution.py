@@ -55,6 +55,7 @@ def _make_client() -> AlpacaDirectClient:
     client._secret_key = "FAKE_SECRET"
     client._equity = Decimal("100000")
     client._session = None
+    client._submitted_symbols = set()  # required by Task-15 session dedup guard
     return client
 
 
