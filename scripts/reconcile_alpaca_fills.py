@@ -108,8 +108,96 @@ def _alpaca_session(api_key: str, secret_key: str) -> requests.Session:
     return s
 
 
+def _alpaca_to_db_symbol(alpaca_symbol: str) -> str:
+    """Reverse of _to_alpaca_symbol in alpaca_direct.py.
+
+    Alpaca returns crypto as a concatenated pair ("BTCUSD", "ETHUSD"); our
+    DB stores them in yfinance style ("BTC-USD", "ETH-USD").  Stocks are
+    unchanged.  FX pairs (EUR-USD, GBP-USD) never appear in Alpaca positions.
+    """
+    if (
+        len(alpaca_symbol) == 6
+        and alpaca_symbol.endswith("USD")
+        and alpaca_symbol not in ("GBPUSD", "EURUSD")
+    ):
+        return alpaca_symbol[:-3] + "-USD"
+    return alpaca_symbol
+
+
+def _sync_positions_from_alpaca(
+    conn,
+    session: requests.Session,
+    endpoint: str,
+) -> None:
+    """Mirror Alpaca /v2/positions into our positions table.
+
+    Alpaca is source of truth: every open Alpaca position is UPSERTed, and
+    any DB row for a symbol NOT in the Alpaca response is zeroed out
+    (quantity=0, unrealized_pnl=0).  Idempotent — safe to run every cron.
+
+    Non-fatal: if the Alpaca API call fails we log a warning and return.
+    Callers should continue — the fills they just wrote are still valid,
+    positions will re-sync on the next cron run.
+    """
+    try:
+        resp = session.get(f"{endpoint}/positions", timeout=10)
+        resp.raise_for_status()
+        alpaca_positions = resp.json() or []
+    except Exception as e:
+        logger.warning(
+            "Position sync failed (non-fatal — fills already committed): %s", e,
+        )
+        return
+
+    db_symbols: list[str] = []
+    with conn.cursor() as cur:
+        for p in alpaca_positions:
+            db_sym = _alpaca_to_db_symbol(p["symbol"])
+            db_symbols.append(db_sym)
+            cur.execute(
+                """
+                INSERT INTO positions
+                    (symbol, quantity, average_cost, unrealized_pnl, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (symbol) DO UPDATE SET
+                    quantity       = EXCLUDED.quantity,
+                    average_cost   = EXCLUDED.average_cost,
+                    unrealized_pnl = EXCLUDED.unrealized_pnl,
+                    updated_at     = NOW()
+                """,
+                (
+                    db_sym,
+                    str(p.get("qty", "0")),
+                    str(p.get("avg_entry_price", "0")),
+                    str(p.get("unrealized_pl", "0")),
+                ),
+            )
+
+        # Zero out any DB rows not returned by Alpaca.  Using = ANY(%s) with
+        # an empty array is safe on PG (no rows match), unlike NOT IN ().
+        cur.execute(
+            """
+            UPDATE positions
+            SET quantity = 0, unrealized_pnl = 0, updated_at = NOW()
+            WHERE quantity != 0
+              AND NOT (symbol = ANY(%s))
+            """,
+            (db_symbols,),
+        )
+
+    conn.commit()
+    logger.info(
+        "Position sync: %d open positions mirrored from Alpaca",
+        len(alpaca_positions),
+    )
+
+
 def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
-    """Reconcile all SUBMITTED orders. Returns number of fills written."""
+    """Reconcile all SUBMITTED orders, then sync positions from Alpaca.
+
+    Returns number of fills written.  Position sync is non-fatal; a
+    sync failure does not affect the returned fill count.
+    """
     conn = psycopg2.connect(db_url)
     fills_written = 0
 
@@ -215,6 +303,11 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                     "Order %s still %s for %s — will check next run",
                     broker_id[:8], alpaca_status, symbol,
                 )
+
+        # After fills are committed, mirror Alpaca positions into our DB.
+        # This is the only place `positions` is populated on Cloud Run —
+        # the Rust OMS (the other writer) does not run there (ALPACA_DIRECT=1).
+        _sync_positions_from_alpaca(conn, session, endpoint)
 
     finally:
         conn.close()
