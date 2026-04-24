@@ -1,0 +1,487 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Phase 5 paper-trading gate progress (90 days, Sharpe > 1.0, MaxDD < 15%). Every panel scoped to paper start (2026-04-07) and surfaces insufficient-data / stale states explicitly to avoid the silent-skip failure mode of incident 2026-04-24.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"title": "Live Trading", "url": "/d/quantai-trading-v1", "type": "link", "icon": "chart-line", "targetBlank": false},
+    {"title": "A/B Attribution", "url": "/d/quantai-ab-attribution", "type": "link", "icon": "doc", "targetBlank": false}
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Gate Status",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Day X / 90",
+      "description": "Calendar days since paper trading started (2026-04-07). Uses date arithmetic, not row count, so weekend/holiday gaps don't understate progress.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+      "targets": [
+        {
+          "rawSql": "SELECT (CURRENT_DATE - DATE '2026-04-07' + 1)::int AS \"Day\"",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "blue", "value": null},
+              {"color": "yellow", "value": 60},
+              {"color": "green", "value": 90}
+            ]
+          },
+          "max": 90
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Sharpe (30d rolling)",
+      "description": "Annualised Sharpe over a 30-day rolling window of daily returns. Returns NULL until at least 5 trading days have had fills — see panel 'Days with Fills' for sample-size context. Gate: > 1.0.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+      "targets": [
+        {
+          "rawSql": "WITH paper AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v, num_trades FROM daily_pnl WHERE trading_date >= DATE '2026-04-07'), fills_check AS (SELECT COUNT(*) FILTER (WHERE num_trades > 0) AS dwf FROM paper), rets AS (SELECT trading_date, (v - LAG(v) OVER (ORDER BY trading_date)) / NULLIF(LAG(v) OVER (ORDER BY trading_date), 0) AS r FROM paper), windowed AS (SELECT trading_date, AVG(r) OVER w AS mu, STDDEV_SAMP(r) OVER w AS sigma FROM rets WHERE r IS NOT NULL WINDOW w AS (ORDER BY trading_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)) SELECT CASE WHEN (SELECT dwf FROM fills_check) < 5 THEN NULL WHEN sigma IS NULL OR sigma = 0 THEN NULL ELSE ROUND((SQRT(252) * mu / sigma)::numeric, 2)::float8 END AS \"Sharpe\" FROM windowed ORDER BY trading_date DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "noValue": "N/A (need ≥5 trading days)",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 0},
+              {"color": "green", "value": 1}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "MaxDD (since paper start)",
+      "description": "Peak-to-trough drawdown computed only from rows on/after 2026-04-07. Excludes pre-paper March rows. Gate: < 15%.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1},
+      "targets": [
+        {
+          "rawSql": "WITH vals AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v FROM daily_pnl WHERE trading_date >= DATE '2026-04-07' ORDER BY trading_date), running AS (SELECT v, MAX(v) OVER (ORDER BY trading_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak FROM vals) SELECT COALESCE(ROUND(ABS(MIN((v - peak) / NULLIF(peak, 0) * 100.0))::numeric, 2), 0)::float8 AS \"Max DD %\" FROM running",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "noValue": "0",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "orange", "value": 10},
+              {"color": "red", "value": 15}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Data Freshness",
+      "description": "Hours since the most recent daily_pnl.updated_at. Red > 36h means the daily cron almost certainly failed — a silent skip would otherwise let the dashboard show a stale equity curve as if it were current. Added in response to incident 2026-04-24.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1},
+      "targets": [
+        {
+          "rawSql": "SELECT ROUND((EXTRACT(EPOCH FROM (NOW() - MAX(updated_at))) / 3600)::numeric, 1)::float8 AS \"Hours since update\" FROM daily_pnl WHERE trading_date >= DATE '2026-04-07'",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "decimals": 1,
+          "noValue": "No data yet",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 24},
+              {"color": "red", "value": 36}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Sample Validity",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Days with Fills (sample for Sharpe)",
+      "description": "How many of the recorded paper-trading days actually had at least one fill. Sharpe over zero-trade days is meaningless; this number tells the operator whether the gate sample is real.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE num_trades > 0)::int AS \"Days with fills\", COUNT(*)::int AS \"Days recorded\" FROM daily_pnl WHERE trading_date >= DATE '2026-04-07'",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "green", "value": 30}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Cumulative Paper P&L vs $100K",
+      "description": "Latest ending_value minus the $100,000 paper starting capital. Single-number answer to 'where do we stand?'. Uses COALESCE so a NULL today's row falls back to its starting_value.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {
+          "rawSql": "SELECT (COALESCE(ending_value, starting_value) - 100000)::float8 AS \"P&L\" FROM daily_pnl WHERE trading_date >= DATE '2026-04-07' ORDER BY trading_date DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "noValue": "No data yet",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": -1000},
+              {"color": "green", "value": 0}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Equity Trajectory",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 10},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Portfolio Equity Curve (since paper start)",
+      "description": "Daily ending portfolio value vs the $100,000 paper baseline. Scoped to 2026-04-07 onward so pre-paper March rows do not appear.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 11},
+      "targets": [
+        {
+          "rawSql": "SELECT trading_date AS time, COALESCE(ending_value, starting_value)::float8 AS \"Equity\", 100000.0::float8 AS \"$100K Baseline\" FROM daily_pnl WHERE trading_date >= DATE '2026-04-07' ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "$100K Baseline"},
+            "properties": [
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "rgba(128,128,128,0.6)"}},
+              {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
+              {"id": "custom.fillOpacity", "value": 0},
+              {"id": "custom.lineWidth", "value": 1}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Equity"},
+            "properties": [
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Drawdown from Peak (gate: > -15%)",
+      "description": "Rolling peak-to-trough drawdown as a percent. Gate fails if the curve crosses -15%. Scoped to paper-start so the pre-paper -2.6% drawdown row from 2026-03-28 does not appear.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 11},
+      "targets": [
+        {
+          "rawSql": "WITH vals AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v FROM daily_pnl WHERE trading_date >= DATE '2026-04-07'), peaks AS (SELECT trading_date, v, MAX(v) OVER (ORDER BY trading_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak FROM vals) SELECT trading_date AS time, ROUND((100.0 * (v - peak) / NULLIF(peak, 0))::numeric, 2)::float8 AS \"Drawdown %\" FROM peaks ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "thresholdsStyle": {"mode": "line+area"}
+          },
+          "color": {"mode": "fixed", "fixedColor": "red"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "transparent", "value": null},
+              {"color": "rgba(255,0,0,0.15)", "value": -15}
+            ]
+          },
+          "max": 0
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Daily Activity & Gate Checklist",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 20},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "barchart",
+      "title": "Daily P&L (since paper start)",
+      "description": "Per-day total P&L (realized + unrealized) from the generated daily_pnl.total_pnl column. Green bars positive, red bars negative.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 21},
+      "targets": [
+        {
+          "rawSql": "SELECT trading_date AS time, COALESCE(total_pnl, 0)::float8 AS \"Daily P&L\" FROM daily_pnl WHERE trading_date >= DATE '2026-04-07' ORDER BY trading_date",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -45,
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "fillOpacity": 80,
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": false},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 0}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "table",
+      "title": "Gate Criteria Checklist",
+      "description": "Each gate row shows current value, threshold, and PASS / PENDING / FAIL / INSUFFICIENT-DATA. Insufficient-data states are explicit so 'looks fine' silence cannot hide a stale or empty input.",
+      "datasource": {"type": "postgres", "uid": "quantai_pg"},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 21},
+      "targets": [
+        {
+          "rawSql": "WITH paper AS (SELECT trading_date, COALESCE(ending_value, starting_value) AS v, num_trades, updated_at FROM daily_pnl WHERE trading_date >= DATE '2026-04-07'), peaks AS (SELECT trading_date, v, MAX(v) OVER (ORDER BY trading_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS peak FROM paper), maxdd AS (SELECT COALESCE(ABS(MIN((v - peak) / NULLIF(peak, 0) * 100.0)), 0) AS dd_pct FROM peaks), rets AS (SELECT (v - LAG(v) OVER (ORDER BY trading_date)) / NULLIF(LAG(v) OVER (ORDER BY trading_date), 0) AS r FROM paper), fills_check AS (SELECT COUNT(*) FILTER (WHERE num_trades > 0) AS dwf, COUNT(*) AS dc FROM paper), sharpe_calc AS (SELECT CASE WHEN (SELECT dwf FROM fills_check) < 5 THEN NULL WHEN COUNT(r) < 2 OR STDDEV_SAMP(r) IS NULL OR STDDEV_SAMP(r) = 0 THEN NULL ELSE SQRT(252) * AVG(r) / STDDEV_SAMP(r) END AS s FROM rets WHERE r IS NOT NULL), days AS (SELECT (CURRENT_DATE - DATE '2026-04-07' + 1) AS day_x), fresh AS (SELECT EXTRACT(EPOCH FROM (NOW() - MAX(updated_at))) / 3600 AS hrs FROM paper) SELECT 'Days elapsed' AS metric, (SELECT day_x FROM days)::text AS current_value, '90' AS threshold, CASE WHEN (SELECT day_x FROM days) >= 90 THEN 'PASS' ELSE 'PENDING (' || (SELECT day_x FROM days)::text || '/90)' END AS status UNION ALL SELECT 'Sharpe (30d)', COALESCE(ROUND((SELECT s FROM sharpe_calc)::numeric, 2)::text, 'N/A'), '> 1.0', CASE WHEN (SELECT s FROM sharpe_calc) IS NULL THEN 'INSUFFICIENT DATA (' || (SELECT dwf FROM fills_check)::text || ' days w/ fills)' WHEN (SELECT s FROM sharpe_calc) >= 1.0 THEN 'PASS' WHEN (SELECT s FROM sharpe_calc) < 0 THEN 'FAIL' ELSE 'PENDING' END UNION ALL SELECT 'Max drawdown', ROUND((SELECT dd_pct FROM maxdd)::numeric, 2)::text || '%', '< 15%', CASE WHEN (SELECT dd_pct FROM maxdd) > 15 THEN 'FAIL' WHEN (SELECT dd_pct FROM maxdd) > 8 THEN 'WARN' ELSE 'PASS' END UNION ALL SELECT 'Days with fills', (SELECT dwf FROM fills_check)::text || ' / ' || (SELECT dc FROM fills_check)::text, '≥ 30 (validity)', CASE WHEN (SELECT dwf FROM fills_check) >= 30 THEN 'PASS' WHEN (SELECT dwf FROM fills_check) >= 5 THEN 'PENDING' ELSE 'INSUFFICIENT DATA' END UNION ALL SELECT 'Data freshness', COALESCE(ROUND((SELECT hrs FROM fresh)::numeric, 1)::text || 'h', 'no data'), '< 36h', CASE WHEN (SELECT hrs FROM fresh) IS NULL THEN 'INSUFFICIENT DATA' WHEN (SELECT hrs FROM fresh) > 36 THEN 'STALE' WHEN (SELECT hrs FROM fresh) > 24 THEN 'WARN' ELSE 'FRESH' END",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "custom": {
+            "align": "auto",
+            "cellOptions": {"type": "auto"},
+            "inspect": false
+          },
+          "thresholds": {"mode": "absolute", "steps": [{"color": "transparent", "value": null}]}
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "status"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "basic"}},
+              {
+                "id": "mappings",
+                "value": [
+                  {"type": "value", "options": {"PASS":  {"color": "green",  "index": 0}}},
+                  {"type": "value", "options": {"FRESH": {"color": "green",  "index": 1}}},
+                  {"type": "value", "options": {"PENDING": {"color": "blue", "index": 2}}},
+                  {"type": "value", "options": {"WARN":  {"color": "orange", "index": 3}}},
+                  {"type": "value", "options": {"STALE": {"color": "orange", "index": 4}}},
+                  {"type": "value", "options": {"FAIL":  {"color": "red",    "index": 5}}},
+                  {"type": "regex", "options": {"pattern": "^INSUFFICIENT DATA", "result": {"color": "purple", "index": 6}}},
+                  {"type": "regex", "options": {"pattern": "^PENDING",           "result": {"color": "blue",   "index": 7}}}
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "refresh": "30m",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["quantai", "phase-5", "gate", "paper-trading"],
+  "templating": {"list": []},
+  "time": {"from": "now-90d", "to": "now"},
+  "timepicker": {},
+  "timezone": "Asia/Bangkok",
+  "title": "QuantAI — 90-Day Gate Progress",
+  "uid": "quantai-gate-progress",
+  "version": 1,
+  "weekStart": ""
+}
