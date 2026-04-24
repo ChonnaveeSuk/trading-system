@@ -3,13 +3,20 @@
 
 ## Current Status
 
-**Phase:** 5 — 90-day paper trading IN PROGRESS (started 2026-04-07)
+**Phase:** 5 — 90-day paper trading IN PROGRESS (day 18/90, started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-23 (Task 11-14: pre-commit + gitleaks; refs a2e759a)
+**Last updated:** 2026-04-25 (Phase 5 hardening complete — refs aaee48e + 4d289ec)
 **Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
 **Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 seeded / 29 live trading (BNB-USD, GBP-USD excluded — not on Alpaca)
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
+
+**Phase 5 hardening (2026-04-24 / 2026-04-25 session):**
+- Task 15 — 3-layer dedup deployed (filled-positions + in-session set + pending orders) — image `runner:e9e973c+`
+- daily_pnl false-drawdown P0 bug fixed + backfilled — Alpaca equity delta replaces cash-flow CASE; see [[ADR-001 daily_pnl equity delta fix]]
+- Phase 5 observability complete: 6 Grafana dashboards (trading, strategy, health, A/B, sector, **gate progress** — new)
+- Phase 6 roadmap defined in 3 design specs: [[DESIGN pgvector regime retrieval]], [[SPEC llm commentary]], [[DESIGN agentic quant research v1]]
+- Obsidian knowledge base bootstrapped (`10 Projects/QuantAI/` + `30 Resources/Trading System Design/`)
 
 **Active plugins:** rust-analyzer-lsp, pyright-lsp, context7, code-review
 
@@ -616,6 +623,42 @@ Refresh: `docker compose restart grafana` (picks up dashboard JSON changes autom
 - **No root/sudo access in this WSL environment.** Everything installed user-local or via Rust/Python.
 - **GCP project ID is `quantai-trading-paper`, not `quantai-trading`.** The shorter ID was already taken globally. All references updated.
 - **GCP runs in local-only mode if `GCP_PROJECT_ID` is unset.** Engine warns but does not fail (ADR-002).
+- **`init.sql` seed INSERT (line 175) plants spurious $100K daily_pnl rows on re-provision.**
+  On 2026-04-16 a fresh `init.sql` apply created a row with `starting_value=100000, ending_value=NULL`
+  inside the paper-trading window, breaking the equity curve continuity. Tracked as Backlog Task 22 —
+  remove the seed INSERT and let `update_daily_pnl.py` create day-1 rows instead.
+- **Local Postgres carries $97,401 base; live Alpaca equity is $99,457 — $2,598 ghost gap.**
+  Origin is the 2026-03-28 `realized_pnl=-2598` row from pre-paper testing. Backlog Task 17 fix 3
+  adds an equity-divergence monitor that compares DB `ending_value` to Alpaca `/v2/account` daily
+  and flags drift > $100. ADR-001 documents the mitigation as known-deferred.
+- **Grafana currently queries local Docker Postgres, not Cloud SQL.**
+  Means dashboards show stale local DB state, not the Cloud Run-tracked production state. Backlog
+  Task 23 — point Grafana datasource at Cloud SQL via Auth Proxy (or move Grafana to Cloud Run).
+
+## Obsidian Knowledge Base
+
+The project's long-form knowledge lives in an Obsidian vault on the Windows side, mounted at
+`/mnt/c/Users/Chonn/Obsidian/MyBrain/`. Read this when you need context that's too detailed
+for `CLAUDE.md` (incident post-mortems, ADR rationale, design specs, daily trading notes).
+
+| Topic | Path |
+|---|---|
+| Project hub (current state, dataview queries) | `10 Projects/QuantAI/QuantAI - MOC.md` |
+| Open task tracker | `10 Projects/QuantAI/Backlog.md` |
+| Daily trading notes | `10 Projects/QuantAI/Daily/YYYY-MM-DD.md` |
+| Pair-programming session logs | `10 Projects/QuantAI/Sessions/` |
+| ADRs (architectural decisions) | `10 Projects/QuantAI/Decisions/` |
+| Incident post-mortems | `10 Projects/QuantAI/Incidents/` |
+| Phase 6+ design specs | `30 Resources/Trading System Design/` |
+
+**Phase 6 design specs (read before implementing any ML enhancement):**
+- `DESIGN pgvector regime retrieval.md` — kNN over historical regime feature vectors
+- `SPEC llm commentary.md` — Anthropic SDK morning-report narrative
+- `DESIGN agentic quant research v1.md` — Phase 6.1-6.4 roadmap (Chronos-Bolt + agent loop + 7 tools)
+
+Daily notes use Tasks-plugin syntax (`- [ ] text 📅 YYYY-MM-DD ⏫🔼🔽 #tag`); the MOC has Dataview
+TABLE queries that aggregate frontmatter from Daily/, Decisions/, Incidents/, and Sessions/, so
+keep frontmatter fields consistent (see `Daily/2026-04-25.md` for the schema).
 
 ## Pre-commit Hooks & Secret Scanning
 
