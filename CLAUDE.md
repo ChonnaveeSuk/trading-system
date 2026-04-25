@@ -5,7 +5,7 @@
 
 **Phase:** 5 — 90-day paper trading IN PROGRESS (day 18/90, started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-25 (Phase 5 hardening complete — refs aaee48e + 4d289ec)
+**Last updated:** 2026-04-25 08:25 ICT (Phase 5 hardening + reconcile resilience — refs aaee48e + 4d289ec + a047fb3)
 **Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
 **Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 seeded / 29 live trading (BNB-USD, GBP-USD excluded — not on Alpaca)
@@ -14,6 +14,7 @@
 **Phase 5 hardening (2026-04-24 / 2026-04-25 session):**
 - Task 15 — 3-layer dedup deployed (filled-positions + in-session set + pending orders) — image `runner:e9e973c+`
 - daily_pnl false-drawdown P0 bug fixed + backfilled — Alpaca equity delta replaces cash-flow CASE; see [[ADR-001 daily_pnl equity delta fix]]
+- Reconcile resilience (`a047fb3`): migration 006 extends `orders.status` vocabulary to full Alpaca lifecycle, adds `_safe_update_order_status` with `conn.rollback()` to handle aborted-transaction trap, `_sync_positions_from_alpaca` runs independently of orders loop. See [[2026-04-25 reconcile constraint violation]].
 - Phase 5 observability complete: 6 Grafana dashboards (trading, strategy, health, A/B, sector, **gate progress** — new)
 - Phase 6 roadmap defined in 3 design specs: [[DESIGN pgvector regime retrieval]], [[SPEC llm commentary]], [[DESIGN agentic quant research v1]]
 - Obsidian knowledge base bootstrapped (`10 Projects/QuantAI/` + `30 Resources/Trading System Design/`)
@@ -634,6 +635,13 @@ Refresh: `docker compose restart grafana` (picks up dashboard JSON changes autom
 - **Grafana currently queries local Docker Postgres, not Cloud SQL.**
   Means dashboards show stale local DB state, not the Cloud Run-tracked production state. Backlog
   Task 23 — point Grafana datasource at Cloud SQL via Auth Proxy (or move Grafana to Cloud Run).
+- **DB CHECK constraints can crash reconcile pipelines via aborted-transaction trap.**
+  A `CheckViolation` puts the psycopg2 connection into "current transaction is aborted" state —
+  every subsequent query then fails with `InFailedSqlTransaction` until `conn.rollback()` is
+  called. On 2026-04-25 this cascaded from a single rejected `CANCELED` status update into an
+  empty positions table + degraded morning report. Migration 006 extended `orders.status`
+  vocabulary; consider broader audit of all CHECK constraints (Task 25). See
+  [[2026-04-25 reconcile constraint violation]].
 
 ## Obsidian Knowledge Base
 
