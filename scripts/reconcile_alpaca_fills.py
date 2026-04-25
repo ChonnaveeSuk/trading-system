@@ -192,14 +192,54 @@ def _sync_positions_from_alpaca(
     )
 
 
-def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
+def _safe_update_order_status(
+    conn, client_order_id, status: str, broker_id_short: str,
+) -> bool:
+    """Update an order's status, swallowing DB errors.
+
+    Returns True on success, False if the UPDATE was rejected (e.g. CHECK
+    constraint violation on an unfamiliar status). On failure the aborted
+    transaction is rolled back so the connection stays usable for the
+    rest of the reconciliation loop and the downstream position sync.
+    """
+    try:
+        _update_order_status(conn, client_order_id, status)
+        return True
+    except psycopg2.Error as e:
+        # CheckViolation, OperationalError, etc. — never let one bad row
+        # take down the whole reconcile loop.
+        logger.warning(
+            "Failed to update order %s → status=%s: %s",
+            broker_id_short, status, e,
+        )
+        try:
+            conn.rollback()
+        except psycopg2.Error:
+            pass
+        return False
+
+
+def reconcile(db_url: str, endpoint: str, session: requests.Session) -> dict:
     """Reconcile all SUBMITTED orders, then sync positions from Alpaca.
 
-    Returns number of fills written.  Position sync is non-fatal; a
-    sync failure does not affect the returned fill count.
+    Returns a dict with operator-visible counters:
+        fills_written:   int  — fills inserted into PostgreSQL
+        update_failures: int  — orders whose status UPDATE was rejected
+                                (e.g. CHECK-constraint mismatch). Each
+                                failure is logged but does not halt the
+                                loop or skip the position sync.
+        positions_synced: bool — whether _sync_positions_from_alpaca ran
+                                 to completion (best-effort; non-fatal).
+
+    Position sync always runs after the orders loop, even if individual
+    UPDATE statements failed — the positions table is the source of
+    truth for the morning report and must not depend on every single
+    order reconciling cleanly.
     """
     conn = psycopg2.connect(db_url)
     fills_written = 0
+    update_failures = 0
+    positions_synced = False
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -219,6 +259,7 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
             broker_id = order["broker_order_id"]
             client_id = order["client_order_id"]
             symbol = order["symbol"]
+            broker_id_short = broker_id[:8] if broker_id else "(none)"
 
             try:
                 resp = session.get(f"{endpoint}/orders/{broker_id}", timeout=10)
@@ -227,14 +268,22 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                 time.sleep(_API_SLEEP_S)
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 404:
-                    # Order not found — may have been cancelled externally
-                    logger.warning("Order %s not found on Alpaca — marking CANCELLED", broker_id[:8])
-                    _update_order_status(conn, client_id, "CANCELLED")
+                    # Order not found — may have been cancelled externally.
+                    # Use "CANCELED" (Alpaca's spelling) — both spellings are
+                    # valid post-migration_006.
+                    logger.warning(
+                        "Order %s not found on Alpaca — marking CANCELED",
+                        broker_id_short,
+                    )
+                    if not _safe_update_order_status(
+                        conn, client_id, "CANCELED", broker_id_short,
+                    ):
+                        update_failures += 1
                 else:
-                    logger.warning("Alpaca API error for %s: %s", broker_id[:8], e)
+                    logger.warning("Alpaca API error for %s: %s", broker_id_short, e)
                 continue
             except Exception as e:
-                logger.warning("Error checking order %s: %s", broker_id[:8], e)
+                logger.warning("Error checking order %s: %s", broker_id_short, e)
                 continue
 
             alpaca_status = alpaca_order.get("status", "unknown")
@@ -247,11 +296,11 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                     fill_price = float(fill_price_str)
                     filled_qty = float(filled_qty_str)
                 except (ValueError, TypeError):
-                    logger.warning("Cannot parse fill data for %s — skipping", broker_id[:8])
+                    logger.warning("Cannot parse fill data for %s — skipping", broker_id_short)
                     continue
 
                 if fill_price <= 0:
-                    logger.warning("Zero fill price for %s — skipping", broker_id[:8])
+                    logger.warning("Zero fill price for %s — skipping", broker_id_short)
                     continue
 
                 fill_id = str(uuid.uuid4())
@@ -263,20 +312,36 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                 except Exception:
                     filled_at = datetime.now(timezone.utc)
 
-                _write_fill(
-                    conn=conn,
-                    fill_id=fill_id,
-                    client_order_id=str(client_id),
-                    broker_order_id=broker_id,
-                    symbol=symbol,
-                    side=order["side"],
-                    filled_qty=filled_qty,
-                    fill_price=fill_price,
-                    commission=_COMMISSION,
-                    filled_at=filled_at,
-                    strategy_id=order["strategy_id"],
-                )
-                _update_order_status(conn, client_id, "FILLED")
+                try:
+                    _write_fill(
+                        conn=conn,
+                        fill_id=fill_id,
+                        client_order_id=str(client_id),
+                        broker_order_id=broker_id,
+                        symbol=symbol,
+                        side=order["side"],
+                        filled_qty=filled_qty,
+                        fill_price=fill_price,
+                        commission=_COMMISSION,
+                        filled_at=filled_at,
+                        strategy_id=order["strategy_id"],
+                    )
+                except psycopg2.Error as e:
+                    logger.warning(
+                        "Failed to write fill for %s: %s — skipping", broker_id_short, e,
+                    )
+                    try:
+                        conn.rollback()
+                    except psycopg2.Error:
+                        pass
+                    update_failures += 1
+                    continue
+
+                if not _safe_update_order_status(
+                    conn, client_id, "FILLED", broker_id_short,
+                ):
+                    update_failures += 1
+                    # Fill is in DB even if status flip failed; do not double-count.
                 fills_written += 1
                 logger.info(
                     "FILLED: %s %s qty=%.4f @ $%.4f  fill_id=%s",
@@ -291,28 +356,42 @@ def reconcile(db_url: str, endpoint: str, session: requests.Session) -> int:
                 )
 
             elif alpaca_status in ("canceled", "expired", "rejected"):
-                _update_order_status(conn, client_id, alpaca_status.upper())
-                logger.info(
-                    "Order %s %s for %s",
-                    broker_id[:8], alpaca_status.upper(), symbol,
-                )
+                if not _safe_update_order_status(
+                    conn, client_id, alpaca_status.upper(), broker_id_short,
+                ):
+                    update_failures += 1
+                else:
+                    logger.info(
+                        "Order %s %s for %s",
+                        broker_id_short, alpaca_status.upper(), symbol,
+                    )
 
             else:
                 # Still pending/accepted — leave as SUBMITTED
                 logger.debug(
                     "Order %s still %s for %s — will check next run",
-                    broker_id[:8], alpaca_status, symbol,
+                    broker_id_short, alpaca_status, symbol,
                 )
 
         # After fills are committed, mirror Alpaca positions into our DB.
         # This is the only place `positions` is populated on Cloud Run —
         # the Rust OMS (the other writer) does not run there (ALPACA_DIRECT=1).
-        _sync_positions_from_alpaca(conn, session, endpoint)
+        # Run unconditionally — positions sync must not depend on every
+        # individual order UPDATE succeeding (pghfd 2026-04-25 incident).
+        try:
+            _sync_positions_from_alpaca(conn, session, endpoint)
+            positions_synced = True
+        except Exception as e:
+            logger.warning("Position sync raised — non-fatal: %s", e)
 
     finally:
         conn.close()
 
-    return fills_written
+    return {
+        "fills_written": fills_written,
+        "update_failures": update_failures,
+        "positions_synced": positions_synced,
+    }
 
 
 def _write_fill(
@@ -365,9 +444,14 @@ def main() -> None:
     endpoint, api_key, secret_key = _load_credentials()
     session = _alpaca_session(api_key, secret_key)
 
-    fills = reconcile(db_url, endpoint, session)
+    result = reconcile(db_url, endpoint, session)
     session.close()
-    logger.info("Done — %d fill(s) written to PostgreSQL", fills)
+    logger.info(
+        "Done — %d fill(s) written, %d update failure(s), positions_synced=%s",
+        result["fills_written"],
+        result["update_failures"],
+        result["positions_synced"],
+    )
 
 
 if __name__ == "__main__":
