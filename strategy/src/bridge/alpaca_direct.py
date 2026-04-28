@@ -46,6 +46,7 @@ from typing import Optional
 import requests
 
 from ..signals import Direction, SignalResult
+from ..signals.momentum import sector_for
 from .client import BridgeResponse, HealthStatus
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,12 @@ _ALPACA_UNSUPPORTED = frozenset({"GBP-USD", "EUR-USD", "BNB-USD"})
 _MAX_POSITION_PCT = Decimal("0.05")   # 5% of portfolio per position
 _MAX_OPEN_POSITIONS = 10
 _MIN_SIGNAL_SCORE = 0.55
+
+# Sector concentration gate (incident 2026-04-28: 100% of book in precious_metals
+# took Sharpe from +1.39 → -1.35 in one day). Sectors come from
+# strategy/src/signals/momentum.py::SYMBOL_TO_SECTOR.
+_MAX_SECTOR_POSITIONS = 3              # max concurrent positions per sector
+_MAX_SECTOR_PCT = Decimal("0.30")      # max sector exposure as fraction of equity
 
 # Alpaca API rate limit: 200 req/min on paper. A brief sleep keeps us safe.
 _API_SLEEP_S = 0.3
@@ -85,6 +92,18 @@ def _to_alpaca_symbol(yf_symbol: str) -> Optional[str]:
     if yf_symbol.endswith("-USD") and yf_symbol not in ("GBP-USD", "EUR-USD"):
         return yf_symbol.replace("-", "")
     return yf_symbol
+
+
+# Crypto pairs we trade on Alpaca, used to reverse the symbol translation when
+# tallying sector exposure from /v2/positions (which returns Alpaca symbols).
+_ALPACA_CRYPTO_REVERSE: dict[str, str] = {"BTCUSD": "BTC-USD"}
+
+
+def _from_alpaca_symbol(alpaca_symbol: str) -> str:
+    """Reverse `_to_alpaca_symbol` so SYMBOL_TO_SECTOR lookups work for the
+    symbols Alpaca returns in /v2/positions. Stocks are unchanged; crypto
+    pairs picked up via the small reverse table."""
+    return _ALPACA_CRYPTO_REVERSE.get(alpaca_symbol, alpaca_symbol)
 
 
 # ── Credential loading ─────────────────────────────────────────────────────────
@@ -560,6 +579,67 @@ class AlpacaDirectClient:
                     "%s: could not check open orders (non-fatal, proceeding): %s",
                     signal.symbol, e,
                 )
+
+            # Guard 4: sector concentration. Tally existing positions in the same
+            # sector as the BUY candidate; reject when adding this one would
+            # exceed the count or notional cap. Added after 2026-04-28 incident
+            # (10/10 positions in precious_metals → -$735 unrealized in one day).
+            new_sector = sector_for(signal.symbol)
+            if new_sector == "other":
+                logger.warning(
+                    "%s: sector unmapped — skipping sector concentration check. "
+                    "Add to SYMBOL_TO_SECTOR in strategy/src/signals/momentum.py",
+                    signal.symbol,
+                )
+            else:
+                sector_count = 0
+                sector_notional = Decimal("0")
+                for held_alpaca_sym, held in positions.items():
+                    held_yf_sym = _from_alpaca_symbol(held_alpaca_sym)
+                    if sector_for(held_yf_sym) != new_sector:
+                        continue
+                    sector_count += 1
+                    try:
+                        held_value = abs(Decimal(str(held.get("market_value", "0"))))
+                    except (InvalidOperation, ValueError):
+                        held_value = Decimal("0")
+                    sector_notional += held_value
+
+                if sector_count >= _MAX_SECTOR_POSITIONS:
+                    logger.warning(
+                        "REJECTED: %s already at %d/%d sector limit",
+                        new_sector, sector_count, _MAX_SECTOR_POSITIONS,
+                    )
+                    return BridgeResponse(
+                        accepted=False,
+                        order_id="",
+                        status="REJECTED",
+                        message=(
+                            f"sector {new_sector} at {sector_count}/"
+                            f"{_MAX_SECTOR_POSITIONS} position limit"
+                        ),
+                    )
+
+                new_notional = qty * Decimal(str(current_price))
+                projected_pct = (sector_notional + new_notional) / equity
+                if projected_pct > _MAX_SECTOR_PCT:
+                    logger.warning(
+                        "REJECTED: %s exposure would be %.1f%% > %.0f%% cap "
+                        "(existing $%.0f + new $%.0f vs equity $%.0f)",
+                        new_sector, float(projected_pct) * 100,
+                        float(_MAX_SECTOR_PCT) * 100,
+                        float(sector_notional), float(new_notional), float(equity),
+                    )
+                    return BridgeResponse(
+                        accepted=False,
+                        order_id="",
+                        status="REJECTED",
+                        message=(
+                            f"sector {new_sector} exposure "
+                            f"{float(projected_pct) * 100:.1f}% > "
+                            f"{float(_MAX_SECTOR_PCT) * 100:.0f}% cap"
+                        ),
+                    )
 
             logger.info(
                 "AlpacaDirect BUY %s qty=%s @ $%.4f  score=%.4f  stop=%s",

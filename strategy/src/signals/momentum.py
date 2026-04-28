@@ -55,6 +55,38 @@ STRATEGY_ID = "momentum_v1"
 MIN_REQUIRED_BARS = 30   # Absolute minimum to compute slow MA
 PRODUCTION_MIN_BARS = 252  # Per design — flag if below this
 
+# ── Sector mapping (single source of truth) ──────────────────────────────────
+# Drives the sector concentration gate in alpaca_direct.py and the sector
+# exposure section in scripts/morning_report.py. Symbols not listed here fall
+# back to "other" — keep in sync with the trading universe.
+SYMBOL_TO_SECTOR: dict[str, str] = {
+    # Precious metals (root cause of 2026-04-28 100% concentration incident)
+    "GLD": "precious_metals", "IAU": "precious_metals",
+    "SLV": "precious_metals", "GDX": "precious_metals", "GDXJ": "precious_metals",
+    "RING": "precious_metals", "PAAS": "precious_metals", "SILJ": "precious_metals",
+    "WPM": "precious_metals", "HL": "precious_metals", "CDE": "precious_metals",
+    "NEM": "precious_metals", "AEM": "precious_metals", "AGI": "precious_metals",
+    "GOLD": "precious_metals", "KGC": "precious_metals",
+    # Tech
+    "AAPL": "tech", "MSFT": "tech", "NVDA": "tech", "XLK": "tech",
+    # Broad-market equity
+    "SPY": "broad_market", "QQQ": "broad_market", "IWM": "broad_market",
+    # Bonds
+    "TLT": "bonds",
+    # Emerging markets
+    "EEM": "emerging",
+    # Crypto
+    "BTC-USD": "crypto", "BNB-USD": "crypto",
+    # Commodities (broad + uranium + industrial metals)
+    "DBC": "commodities", "SCCO": "commodities", "MP": "commodities",
+    "URA": "commodities", "URNM": "commodities",
+}
+
+
+def sector_for(symbol: str) -> str:
+    """Return the sector label for `symbol`, or "other" if unmapped."""
+    return SYMBOL_TO_SECTOR.get(symbol, "other")
+
 # Default RSI period — 7-period (fast, tuned in Phase 3 simulation).
 # Override via MomentumConfig.rsi_period for RSI(14) mean-reversion layer.
 _DEFAULT_RSI_PERIOD = 7

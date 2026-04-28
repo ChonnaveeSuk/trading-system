@@ -22,6 +22,8 @@ from src.bridge.alpaca_direct import (
     _to_alpaca_symbol,
     _ALPACA_UNSUPPORTED,
     _MAX_POSITION_PCT,
+    _MAX_SECTOR_POSITIONS,
+    _MAX_SECTOR_PCT,
     _MIN_SIGNAL_SCORE,
 )
 from src.bridge.client import BridgeResponse, HealthStatus
@@ -430,6 +432,126 @@ class TestApiErrors:
         assert result is not None
         assert result.accepted is False
         assert result.status == "ERROR"
+
+
+# ── Sector concentration gate ─────────────────────────────────────────────────
+
+def _pos(symbol: str, qty: str = "10", market_value: str = "5000") -> dict:
+    """Build a fake Alpaca /v2/positions entry."""
+    return {
+        "symbol": symbol,
+        "qty": qty,
+        "market_value": market_value,
+        "avg_entry_price": "100",
+    }
+
+
+class TestSectorGate:
+    """Sector concentration limit (added 2026-04-28 incident response).
+
+    precious_metals saturates fastest in the live universe, so it's the
+    canonical fixture. AAPL stands in for the unrelated-sector control.
+    """
+
+    # All precious_metals symbols Alpaca actually trades (BNB-USD, GBP-USD
+    # are excluded from _to_alpaca_symbol so they never hit this code path).
+    _PM_SYMBOLS = ("GLD", "IAU", "SLV", "GDX", "GDXJ", "RING", "PAAS",
+                   "WPM", "HL", "CDE", "NEM", "AEM", "AGI", "GOLD")
+
+    def test_sector_at_count_limit_rejects_buy(self):
+        """3 precious_metals positions already → 4th BUY (KGC) rejected."""
+        client = _make_client()
+        positions = [_pos(s, market_value="1000") for s in self._PM_SYMBOLS[:3]]
+        client._session.get.side_effect = [
+            _mock_account("100000"),
+            _mock_positions(positions),
+        ]
+        signal = _buy_signal(symbol="KGC", qty=Decimal("5"))
+
+        result = client.submit_signal(signal, current_price=8.0)
+
+        assert result is not None
+        assert result.accepted is False
+        assert result.status == "REJECTED"
+        assert "precious_metals" in result.message
+        assert f"{_MAX_SECTOR_POSITIONS}" in result.message
+        client._session.post.assert_not_called()
+
+    def test_sector_under_count_limit_passes(self):
+        """2 precious_metals positions → 3rd BUY proceeds (count under cap)."""
+        client = _make_client()
+        positions = [_pos(s, market_value="500") for s in self._PM_SYMBOLS[:2]]
+        # Open-orders call is wrapped in try/except, so an empty list reply suffices.
+        client._session.get.side_effect = [
+            _mock_account("100000"),
+            _mock_positions(positions),
+            _mock_positions([]),  # open_orders → []
+        ]
+        client._session.post.return_value = _mock_order_response()
+
+        signal = _buy_signal(symbol="KGC", qty=Decimal("5"))
+        with patch.object(client, "_record_order_pg"):
+            result = client.submit_signal(signal, current_price=8.0)
+
+        assert result is not None
+        assert result.accepted is True
+
+    def test_sector_pct_breach_rejects_buy(self):
+        """1 huge precious_metals position pushes sector ≥30% → next BUY rejected."""
+        client = _make_client()
+        # Single existing position with $30,000 market_value on $100k equity =
+        # exactly 30% of book before any new BUY. Adding even a $1 position
+        # tips us over the cap.
+        client._session.get.side_effect = [
+            _mock_account("100000"),
+            _mock_positions([_pos("GLD", market_value="30000")]),
+        ]
+        signal = _buy_signal(symbol="KGC", qty=Decimal("100"))  # large enough to matter
+
+        result = client.submit_signal(signal, current_price=10.0)
+
+        assert result is not None
+        assert result.accepted is False
+        assert result.status == "REJECTED"
+        assert "precious_metals" in result.message
+        assert f"{int(float(_MAX_SECTOR_PCT) * 100)}%" in result.message
+        client._session.post.assert_not_called()
+
+    def test_other_sector_unaffected_by_saturated_sector(self):
+        """precious_metals at 3/3 must not block AAPL (tech sector)."""
+        client = _make_client()
+        positions = [_pos(s, market_value="1000") for s in self._PM_SYMBOLS[:3]]
+        client._session.get.side_effect = [
+            _mock_account("100000"),
+            _mock_positions(positions),
+            _mock_positions([]),  # open_orders
+        ]
+        client._session.post.return_value = _mock_order_response()
+
+        signal = _buy_signal(symbol="AAPL", qty=Decimal("5"))
+        with patch.object(client, "_record_order_pg"):
+            result = client.submit_signal(signal, current_price=180.0)
+
+        assert result is not None
+        assert result.accepted is True
+
+    def test_unmapped_symbol_skips_sector_check(self):
+        """Symbol not in SYMBOL_TO_SECTOR must not block the trade — only warn."""
+        client = _make_client()
+        client._session.get.side_effect = [
+            _mock_account("100000"),
+            _mock_positions([]),
+            _mock_positions([]),  # open_orders
+        ]
+        client._session.post.return_value = _mock_order_response()
+
+        # ZZZZ is not in SYMBOL_TO_SECTOR → sector_for() returns "other"
+        signal = _buy_signal(symbol="ZZZZ", qty=Decimal("5"))
+        with patch.object(client, "_record_order_pg"):
+            result = client.submit_signal(signal, current_price=50.0)
+
+        assert result is not None
+        assert result.accepted is True
 
 
 # ── Context manager ───────────────────────────────────────────────────────────

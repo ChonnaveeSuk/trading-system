@@ -44,6 +44,15 @@ pub struct RiskConfig {
     /// When true, callers should create a `TrailingStopState` on BUY and
     /// call `state.update(price)` on each new bar to advance the ratchet.
     pub trailing_stop: bool,
+    /// Maximum simultaneous open positions per sector. Hardcoded: 3.
+    /// Sectors are defined in `strategy/src/signals/momentum.py::SYMBOL_TO_SECTOR`.
+    /// Enforced at submission time by `alpaca_direct.py` (the live order path on
+    /// Cloud Run). The Rust engine stays sector-agnostic (ADR-003 statelessness)
+    /// so this field documents the limit and lets future Rust code reach for it.
+    pub max_sector_positions: usize,
+    /// Maximum total exposure per sector as fraction of portfolio. Hardcoded: 30%.
+    /// Same enforcement contract as `max_sector_positions`.
+    pub max_sector_pct: Decimal,
 }
 
 impl Default for RiskConfig {
@@ -56,6 +65,8 @@ impl Default for RiskConfig {
             max_open_orders: 10,
             atr_sizing: true,
             trailing_stop: true,
+            max_sector_positions: 3,
+            max_sector_pct: dec!(0.30),
         }
     }
 }
@@ -798,6 +809,15 @@ mod tests {
     #[test]
     fn atr_sizing_enabled_by_default() {
         assert!(RiskConfig::default().atr_sizing);
+    }
+
+    // ── Sector limits ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn sector_limits_have_expected_defaults() {
+        let cfg = RiskConfig::default();
+        assert_eq!(cfg.max_sector_positions, 3);
+        assert_eq!(cfg.max_sector_pct, dec!(0.30));
     }
 
     // ── atr_from_bars ─────────────────────────────────────────────────────────

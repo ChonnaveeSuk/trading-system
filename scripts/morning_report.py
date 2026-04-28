@@ -46,38 +46,14 @@ _REGIME_EMOJI = {"BULL": "\U0001f7e2", "NEUTRAL": "\U0001f7e1", "BEAR": "\U0001f
 
 
 # ── Sector mapping ────────────────────────────────────────────────────────────
-# Maps symbol -> broad sector/theme for concentration analysis.
-# Keep in sync with trading universe (strategy/src/data/alpaca_fetcher.py).
-SECTOR_MAP: dict = {
-    # Precious metals (gold + silver ETFs + miners)
-    "GLD": "precious_metals", "IAU": "precious_metals",
-    "AEM": "precious_metals", "KGC": "precious_metals", "AGI": "precious_metals",
-    "WPM": "precious_metals", "GOLD": "precious_metals", "NEM": "precious_metals",
-    "CDE": "precious_metals",
-    "SLV": "precious_metals", "SILJ": "precious_metals", "PAAS": "precious_metals",
-    "HL": "precious_metals", "GDX": "precious_metals", "GDXJ": "precious_metals",
-    "RING": "precious_metals",
-    # Uranium
-    "URA": "uranium", "URNM": "uranium",
-    # Industrial / rare-earth
-    "SCCO": "industrial_metals", "MP": "industrial_metals",
-    # Broad commodities
-    "DBC": "commodities_broad",
-    # Bonds
-    "TLT": "bonds",
-    # Broad equity
-    "SPY": "equity_broad", "QQQ": "equity_broad", "IWM": "equity_broad",
-    "XLK": "equity_tech", "EEM": "equity_emerging",
-    # Single-name equity
-    "AAPL": "equity_single",
-    # Crypto & FX (not on Alpaca but in universe)
-    "BTC-USD": "crypto", "BNB-USD": "crypto",
-    "GBP-USD": "forex", "EUR-USD": "forex",
-}
+# Single source of truth lives in strategy/src/signals/momentum.py so the live
+# sector gate (alpaca_direct.py) and this morning report can never drift apart.
+_STRATEGY_DIR = os.path.join(os.path.dirname(_SCRIPTS_DIR), "strategy")
+sys.path.insert(0, _STRATEGY_DIR)
+from src.signals.momentum import SYMBOL_TO_SECTOR, sector_for as _sector_for  # noqa: E402
 
-
-def _sector_for(symbol: str) -> str:
-    return SECTOR_MAP.get(symbol, "other")
+# Re-export for backwards compatibility with anything that imported from here.
+SECTOR_MAP = SYMBOL_TO_SECTOR
 
 
 def _connect():
@@ -434,21 +410,39 @@ def build_report() -> tuple[str, str]:
     else:
         ab_section = None
     # ── Sector Concentration (skip if no positions) ───────────────────────────
+    # Mirrors the live-trading sector gate in alpaca_direct.py.
+    from src.bridge.alpaca_direct import _MAX_SECTOR_POSITIONS, _MAX_SECTOR_PCT
+    sector_count_cap = _MAX_SECTOR_POSITIONS
+    sector_pct_cap = float(_MAX_SECTOR_PCT) * 100  # e.g. 30.0
     sector_data = _query_sector_concentration()
     if sector_data["by_sector"]:
         lines = ["\U0001f3af Sector Exposure"]
         by_s = sector_data["by_sector"]
         total = sector_data["total_notional"] or 1.0
+        warnings_lines: list[str] = []
         for sec, info in sorted(by_s.items(), key=lambda kv: -kv[1]["notional"]):
             pct = info["notional"] / total * 100
             lines.append(
                 f"  {sec:<20} {info['count']:>2}pos  "
                 f"{pct:>5.1f}%  {_fmt_pnl(info['unrealized'])}"
             )
+            if info["count"] >= sector_count_cap:
+                warnings_lines.append(
+                    f"  \U0001f6a8 {sec} at {info['count']}/{sector_count_cap} "
+                    f"position cap \u2014 new BUYs blocked"
+                )
+            if pct > sector_pct_cap:
+                warnings_lines.append(
+                    f"  \u26a0 {sec} {pct:.0f}% of book > "
+                    f"{sector_pct_cap:.0f}% sector cap"
+                )
         if sector_data["largest_sector"]:
             name, pct = sector_data["largest_sector"]
             if pct > 50:
-                lines.append(f"  \u26a0 HIGH CONCENTRATION: {name} {pct:.0f}% of book")
+                warnings_lines.append(
+                    f"  \u26a0 HIGH CONCENTRATION: {name} {pct:.0f}% of book"
+                )
+        lines.extend(warnings_lines)
         sector_section = "\n".join(lines)
     else:
         sector_section = None
