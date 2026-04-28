@@ -38,6 +38,9 @@ _PAPER_START = date(2026, 4, 7)
 _REGIME_EMOJI = {"BULL": "\U0001f7e2", "NEUTRAL": "\U0001f7e1", "BEAR": "\U0001f534"}
 # 😰 CALM, ⚠️ CAUTION, 🚨 PANIC
 _VIX_EMOJI = {"CALM": "\U0001f630", "CAUTION": "⚠️", "PANIC": "\U0001f6a8"}
+# 📅 next event,  ⛔ blackout today
+_CAL_NEXT_EMOJI = "\U0001f4c5"
+_CAL_BLOCK_EMOJI = "⛔"
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -87,6 +90,40 @@ def _query_regime() -> dict:
     except Exception as e:
         logger.warning("Regime query failed: %s", e)
     return {}
+
+
+def _build_calendar_section(today: date) -> Optional[str]:
+    """Compose the morning-report calendar block.
+
+    Shows:
+      - ⛔ today's blackout reason (if any)
+      - 📅 next upcoming event with day-distance
+    Returns None when both are absent (calendar import or call failed).
+    """
+    try:
+        from src.filters.economic_calendar import EconomicCalendar
+    except Exception as e:
+        logger.debug("EconomicCalendar import failed (non-fatal): %s", e)
+        return None
+    cal = EconomicCalendar()
+    lines: list[str] = []
+    blackout = cal.blackout_reason(today)
+    if blackout:
+        lines.append(f"{_CAL_BLOCK_EMOJI} BLACKOUT: {blackout} — BUY blocked today")
+    nxt = cal.get_next_event(today)
+    if nxt:
+        ev, days_away = nxt
+        if days_away == 0:
+            when = "today"
+        elif days_away == 1:
+            when = "tomorrow"
+        else:
+            when = f"{days_away} days away"
+        lines.append(
+            f"{_CAL_NEXT_EMOJI} Next event: {ev.kind.value} "
+            f"({ev.event_date.strftime('%b %-d')}) — {when}"
+        )
+    return "\n".join(lines) if lines else None
 
 
 def _query_vix() -> dict:
@@ -407,6 +444,9 @@ def build_report() -> tuple[str, str]:
     else:
         vix_section = None
 
+    # \u2500\u2500 Economic calendar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    cal_section = _build_calendar_section(today)
+
     # ── Signals ───────────────────────────────────────────────────────────────
     buy_count = int(signals_data.get("buy", 0))
     sell_count = int(signals_data.get("sell", 0))
@@ -547,6 +587,8 @@ def build_report() -> tuple[str, str]:
     ]
     if vix_section:
         sections.append(vix_section)
+    if cal_section:
+        sections.append(cal_section)
     sections.append(signals_section)
     if ab_section:
         sections.append(ab_section)

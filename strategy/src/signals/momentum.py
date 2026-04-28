@@ -232,6 +232,25 @@ class MomentumConfig:
     vix_low_lookback: int = 252           # relative mode: lookback window for the rolling low
     vix_ma_period: int = 20               # Smoothing MA period for VIXY close
 
+    # Economic-calendar blackout filter — block new BUY orders on / before
+    # high-impact macro event days (FOMC, CPI, NFP, GDP, Fed-Chair speeches).
+    # The calendar itself lives in strategy/src/filters/economic_calendar.py
+    # and is hardcoded for 2026; auto-generates NFP+CPI for later years.
+    #
+    # Blackout rule:
+    #   event day itself           → BLACKOUT
+    #   N days before event        → BLACKOUT (where N = calendar_blackout_days)
+    #   anywhere else              → no change
+    #
+    # SELL signals always pass (need to be able to exit before the event).
+    #
+    # Live path: pass `today` into generate_signal()/update_calendar(today) so
+    # the strategy knows the trading-date frame.  Backtest path: pass
+    # calendar_df=None — the backtester reads bar timestamps and applies the
+    # blackout per-bar via the same filter.
+    calendar_filter: bool = True
+    calendar_blackout_days: int = 1   # days before the event that are also blacked out
+
 
 @dataclass
 class MomentumFeatures:
@@ -273,6 +292,13 @@ class MomentumStrategy:
         self._vix_state: str = "CALM"
         self._vix_level: Optional[float] = None    # smoothed VIXY MA value
         self._vix_price: Optional[float] = None    # latest raw VIXY close
+        # Economic-calendar blackout filter (lazy-init; permissive when disabled)
+        self._calendar = None
+        if self.config.calendar_filter:
+            from ..filters.economic_calendar import EconomicCalendar
+            self._calendar = EconomicCalendar(
+                blackout_days_before=self.config.calendar_blackout_days
+            )
 
     # ── Market regime ─────────────────────────────────────────────────────────
 
@@ -790,6 +816,31 @@ class MomentumStrategy:
                 score = 0.0
         # CAUTION sizing halving is applied to qty after the sizing block — see below.
 
+        # ── Economic-calendar blackout filter ─────────────────────────────────
+        # Block BUY on event day or within N days before (FOMC/CPI/NFP/GDP/
+        # Fed-Chair speeches).  Uses the latest bar's date to choose "today",
+        # which is the trading-date frame for both live and per-bar backtest
+        # callers.  SELL passes through unconditionally.
+        calendar_blocked_event: Optional[str] = None
+        if (
+            self.config.calendar_filter
+            and self._calendar is not None
+            and direction == Direction.BUY
+        ):
+            try:
+                latest_ts = df.index[-1]
+                today = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
+                if self._calendar.is_blackout_day(today):
+                    calendar_blocked_event = self._calendar.blackout_reason(today) or "blackout"
+                    logger.info(
+                        "%s: BLACKOUT — %s — BUY suppressed",
+                        symbol, calendar_blocked_event,
+                    )
+                    direction = Direction.HOLD
+                    score = 0.0
+            except Exception as e:
+                logger.debug("Calendar filter check failed (non-fatal): %s", e)
+
         # ── ATR computation ───────────────────────────────────────────────────
         # ATR(atr_period) used for adaptive position sizing and stop placement.
         # Falls back to fixed position_pct sizing when atr_period=0 or ATR is NaN.
@@ -894,6 +945,7 @@ class MomentumStrategy:
             "vix_state": self._vix_state if self.config.vix_filter else "DISABLED",
             "vix_level": round(self._vix_level, 4) if self._vix_level is not None else None,
             "vix_price": round(self._vix_price, 4) if self._vix_price is not None else None,
+            "calendar_blackout": calendar_blocked_event,
             "trend_ride": trend_ride_buy,
             "trend_ride_exit_gated": trend_ride_exit_gated,
         }
@@ -1216,5 +1268,25 @@ class MomentumStrategy:
                     panic_mask = signals["direction"] == Direction.BUY.value
                     signals.loc[panic_mask, "direction"] = Direction.HOLD.value
                     signals.loc[panic_mask, "score"] = 0.0
+
+        # ── Economic-calendar blackout (vectorised per-bar) ───────────────────
+        # Blackout dates come from the hand-curated calendar; SELL passes
+        # through.  We label bars with the blackout reason for diagnostics.
+        signals["calendar_blackout"] = None
+        if self.config.calendar_filter and self._calendar is not None:
+            blackout_mask = pd.Series(False, index=signals.index)
+            reasons: list[Optional[str]] = []
+            for ts in signals.index:
+                d = ts.date() if hasattr(ts, "date") else ts
+                reason = self._calendar.blackout_reason(d)
+                if reason is not None:
+                    blackout_mask.loc[ts] = True
+                reasons.append(reason)
+            signals["calendar_blackout"] = reasons
+
+            buy_mask = signals["direction"] == Direction.BUY.value
+            blocked = buy_mask & blackout_mask
+            signals.loc[blocked, "direction"] = Direction.HOLD.value
+            signals.loc[blocked, "score"] = 0.0
 
         return signals

@@ -302,6 +302,39 @@ def run_live(symbols: list[str]) -> None:
             counts["regime_spy_price"] = round(spy_price, 2)   # type: ignore[assignment]
             counts["regime_spy_ma200"] = round(spy_ma200, 2)   # type: ignore[assignment]
 
+        # ── Economic calendar — surface blackout / D-1 alert ─────────────────
+        if strategy.config.calendar_filter:
+            try:
+                from src.filters.economic_calendar import EconomicCalendar
+                _cal = EconomicCalendar(blackout_days_before=strategy.config.calendar_blackout_days)
+                import datetime as _dt
+                _today = _dt.date.today()
+                _block_reason = _cal.blackout_reason(_today)
+                if _block_reason:
+                    print(f"  [CALENDAR] BLACKOUT — {_block_reason} — all BUYs blocked")
+                _next = _cal.get_next_event(_today)
+                if _next:
+                    _ev, _days = _next
+                    print(f"  [CALENDAR] Next event: {_ev.kind.value} "
+                          f"({_ev.event_date.isoformat()}) — {_days} day(s) away")
+                # D-1 alert: fire once per day when an event is exactly tomorrow
+                _tomorrow_ev = _cal.event_within(_today, 1)
+                if _tomorrow_ev is not None and (_tomorrow_ev.event_date - _today).days == 1:
+                    _telegram_alert(
+                        f"Tomorrow: {_tomorrow_ev.kind.value} — {_tomorrow_ev.description}\n"
+                        f"BUY orders will be blocked on "
+                        f"{_today.isoformat()} and {_tomorrow_ev.event_date.isoformat()}.",
+                        level="WARNING",
+                    )
+                counts["calendar_blackout"] = bool(_block_reason)         # type: ignore[assignment]
+                counts["calendar_blackout_reason"] = _block_reason or ""  # type: ignore[assignment]
+                if _next:
+                    counts["calendar_next_event"] = _next[0].kind.value   # type: ignore[assignment]
+                    counts["calendar_next_event_date"] = _next[0].event_date.isoformat()  # type: ignore[assignment]
+                    counts["calendar_next_event_days_away"] = int(_next[1])  # type: ignore[assignment]
+            except Exception as _e:
+                logger.debug("Calendar telemetry/alert failed (non-fatal): %s", _e)
+
         # ── VIX (volatility) detection — drives BUY blocking and size halving ─
         if strategy.config.vix_filter:
             vixy_days = max(strategy.config.vix_ma_period * 4, 90)
