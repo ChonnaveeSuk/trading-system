@@ -142,10 +142,8 @@ def send_alert(message: str, level: str = "INFO") -> bool:
 
 # ── Daily summary ──────────────────────────────────────────────────────────────
 
-_DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _db import database_url as _database_url
 
 
 def _query_daily_pnl() -> dict:
@@ -158,7 +156,7 @@ def _query_daily_pnl() -> dict:
 
     result: dict = {}
     try:
-        conn = psycopg2.connect(_DB_URL)
+        conn = psycopg2.connect(_database_url())
         today = date.today()
         try:
             with conn.cursor() as cur:

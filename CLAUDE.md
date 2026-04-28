@@ -235,7 +235,7 @@ docker compose ps   # postgres + redis + grafana should show "healthy"
 
 # 2. Rust build + tests (requires PROTOC and DATABASE_URL)
 export PROTOC=/home/chonsuk/.local/bin/protoc
-export DATABASE_URL=postgres://quantai:quantai_dev_2026@localhost:5432/quantai
+export DATABASE_URL=postgres://quantai:$POSTGRES_PASSWORD@localhost:5432/quantai
 cd core && cargo test        # Must show 46 passed (221 total with Python)
 cd core && cargo clippy -- -D warnings   # Zero warnings
 
@@ -271,7 +271,7 @@ DATABASE_URL=postgresql://quantai:PASSWORD@/quantai?host=/cloudsql/quantai-tradi
 DATABASE_URL=postgresql://quantai:PASSWORD@127.0.0.1:5434/quantai
 
 # Local Docker (tests / cargo run — never use Cloud SQL here):
-DATABASE_URL=postgres://quantai:quantai_dev_2026@localhost:5432/quantai
+DATABASE_URL=postgres://quantai:$POSTGRES_PASSWORD@localhost:5432/quantai
 
 # Get Cloud SQL password:
 gcloud secrets versions access latest --secret=cloud-sql-quantai-password --project=quantai-trading-paper
@@ -363,7 +363,7 @@ cd gcp/terraform && terraform output workload_identity_provider
 
 ```bash
 # Start the Rust execution engine (gRPC on :50051)
-export DATABASE_URL=postgres://quantai:quantai_dev_2026@localhost:5432/quantai
+export DATABASE_URL=postgres://quantai:$POSTGRES_PASSWORD@localhost:5432/quantai
 export PROTOC=/home/chonsuk/.local/bin/protoc
 export TRADING_MODE=paper
 export GCP_PROJECT_ID=quantai-trading-paper
@@ -705,13 +705,24 @@ MUST include an `Emergency-bypass:` line in the body explaining the
 reason and the follow-up cleanup. The CI `security-scan` still
 runs on push, so local bypass does not bypass the full defense.
 
-### Allowlist (Task 6 follow-up)
+### Credentials & DATABASE_URL
 
-`quantai_dev_2026` is allowlisted in `.gitleaks.toml` because it
-appears as a hardcoded dev-fallback password in **25 files / 31
-occurrences** (scripts, strategy, Rust OMS, tests, docs). Task 6
-will replace these with fail-loud env-var reads; once merged,
-delete the allowlist block from `.gitleaks.toml`.
+The hardcoded dev-fallback password (`quantai_dev_2026`) was removed
+from all source files in 2026-04-28. Production code now reads
+`DATABASE_URL` from the environment and fails loud if it is missing
+(`strategy/src/db.py` and `scripts/_db.py` are the canonical helpers).
+The corresponding `.gitleaks.toml` allowlist block was deleted.
+
+To run anything that touches Postgres (cargo, pytest, CLI scripts,
+Cloud Run jobs), export `DATABASE_URL` first — typically from `.env`:
+
+```bash
+set -a && . .env && set +a
+export DATABASE_URL="postgres://quantai:${POSTGRES_PASSWORD}@localhost:5432/quantai"
+```
+
+The Grafana datasource reads `${POSTGRES_PASSWORD}` at provisioning
+time via the env var passed in `docker-compose.yml`.
 
 ### Updating hook revs
 

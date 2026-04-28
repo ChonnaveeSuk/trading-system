@@ -181,10 +181,9 @@ def test_sync_positions_runs_when_sync_itself_raises():
 
 def _live_db_url() -> str | None:
     """Return DATABASE_URL only if it points at a reachable Postgres."""
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-    )
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None
     try:
         c = psycopg2.connect(url, connect_timeout=2)
         c.close()

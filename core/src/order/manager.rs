@@ -662,9 +662,9 @@ mod tests {
     use rust_decimal_macros::dec;
 
     async fn try_pool() -> Option<PgPool> {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai".into()
-        });
+        // Tests skip if DATABASE_URL is unset rather than relying on a hardcoded
+        // dev fallback (see .gitleaks.toml allowlist removal).
+        let url = std::env::var("DATABASE_URL").ok()?;
         sqlx::PgPool::connect(&url).await.ok()
     }
 

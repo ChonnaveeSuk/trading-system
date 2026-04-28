@@ -34,10 +34,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("update_daily_pnl")
 
-_DSN = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _db import database_url as _database_url
+
 _STARTING_CAPITAL = Decimal("100000.00")
 _GCP_PROJECT = os.environ.get("GCP_PROJECT_ID", "quantai-trading-paper")
 _ALPACA_ENDPOINT_DEFAULT = "https://paper-api.alpaca.markets/v2"
@@ -131,7 +130,8 @@ def _load_alpaca_session():
     return session, endpoint
 
 
-def update(dsn: str = _DSN) -> None:
+def update(dsn: Optional[str] = None) -> None:
+    dsn = dsn or _database_url()
     today = date.today()
     conn = psycopg2.connect(dsn)
 

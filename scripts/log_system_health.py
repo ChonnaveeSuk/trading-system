@@ -28,12 +28,10 @@ from typing import Optional
 
 import psycopg2
 
-# ── Config ────────────────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _db import database_url as _database_url
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+# ── Config ────────────────────────────────────────────────────────────────────
 
 DOCKER_CONTAINERS = [
     "quantai-postgres",
@@ -47,7 +45,7 @@ ALPACA_ENDPOINT_DEFAULT = "https://paper-api.alpaca.markets/v2"
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(_database_url())
 
 
 def insert_metric(

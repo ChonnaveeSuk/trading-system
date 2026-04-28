@@ -12,8 +12,10 @@ datasources:
     uid: quantai_pg
     url: quantai-postgres:5432
     user: quantai
+    # Password is read from Grafana's process env at provisioning time;
+    # docker-compose passes POSTGRES_PASSWORD into the grafana container.
     secureJsonData:
-      password: quantai_dev_2026
+      password: ${POSTGRES_PASSWORD}
     jsonData:
       database:         quantai
       sslmode:          disable

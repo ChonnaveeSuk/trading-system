@@ -19,7 +19,8 @@ REPO="/home/chonsuk/trading-system"
 LOG_FILE="/var/log/quantai-first-live-fill.log"
 RESULT_FILE="/tmp/quantai_first_fill_result.json"
 
-export DATABASE_URL="postgres://quantai:quantai_dev_2026@localhost:5432/quantai"
+: "${DATABASE_URL:?DATABASE_URL must be set — export it from .env or set in cron environment}"
+export DATABASE_URL
 export GCP_PROJECT_ID="quantai-trading-paper"
 
 echo ""

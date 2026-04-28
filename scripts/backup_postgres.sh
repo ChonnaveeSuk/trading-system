@@ -60,7 +60,8 @@ else
     PGPORT="${POSTGRES_PORT:-5432}"
     PGDATABASE="${POSTGRES_DB:-quantai}"
     PGUSER="${POSTGRES_USER:-quantai}"
-    PGPASSWORD="${POSTGRES_PASSWORD:-quantai_dev_2026}"
+    : "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD or DATABASE_URL must be set — see .env.example}"
+    PGPASSWORD="${POSTGRES_PASSWORD}"
 fi
 export PGPASSWORD
 

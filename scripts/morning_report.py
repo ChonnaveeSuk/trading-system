@@ -28,14 +28,10 @@ from typing import Optional
 _SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPTS_DIR)
 from telegram_alert import send_alert
+from _db import database_url as _database_url
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("morning_report")
-
-_DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
 _SIGNALS_FILE = "/tmp/quantai_signals_today.json"
 _PAPER_START = date(2026, 4, 7)
 
@@ -58,7 +54,7 @@ SECTOR_MAP = SYMBOL_TO_SECTOR
 
 def _connect():
     import psycopg2
-    return psycopg2.connect(_DB_URL)
+    return psycopg2.connect(_database_url())
 
 
 def _query_regime() -> dict:

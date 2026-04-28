@@ -76,6 +76,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD:      quantai_grafana
       GF_USERS_ALLOW_SIGN_UP:          "false"
       GF_ANALYTICS_REPORTING_ENABLED:  "false"
+      # Datasource provisioning reads ${POSTGRES_PASSWORD} from this env at boot.
+      POSTGRES_PASSWORD:               ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -27,11 +27,8 @@ from . import validate_ohlcv
 
 logger = logging.getLogger(__name__)
 
-# Default connection: mirrors .env / Docker Compose setup
-_DEFAULT_DSN = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+# DSN read lazily from DATABASE_URL — no hardcoded fallback. See strategy.src.db.
+from ..db import database_url as _database_url
 
 
 class PostgresOhlcvFetcher:
@@ -47,8 +44,8 @@ class PostgresOhlcvFetcher:
         # df: DatetimeIndex, columns=[open,high,low,close,volume,vwap]
     """
 
-    def __init__(self, dsn: str = _DEFAULT_DSN) -> None:
-        self._dsn = dsn
+    def __init__(self, dsn: Optional[str] = None) -> None:
+        self._dsn = dsn or _database_url()
         self._conn: Optional[psycopg2.extensions.connection] = None
 
     # ── Connection management ─────────────────────────────────────────────────

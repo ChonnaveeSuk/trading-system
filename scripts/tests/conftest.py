@@ -35,10 +35,7 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 _ROOT = _SCRIPTS_DIR.parent
 _INFRA = _ROOT / "infra" / "postgres"
 
-DB_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+DB_URL = os.environ.get("DATABASE_URL")
 
 # init.sql is idempotent (CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT
 # EXISTS).  The triggers are not — re-running raises.  We strip them on
@@ -65,6 +62,9 @@ def schema_applied() -> Iterator[None]:
     Skips the entire test module if the local Postgres is unreachable —
     keeps CI/dev environments without Docker green.
     """
+    if not DB_URL:
+        pytest.skip("DATABASE_URL not set; skipping integration tests.")
+        return
     try:
         conn = psycopg2.connect(DB_URL, connect_timeout=2)
     except psycopg2.Error as e:

@@ -50,14 +50,18 @@ async fn main() -> Result<()> {
     info!(mode = %mode, "Trading mode verified: PAPER ONLY");
 
     // ── 3. PostgreSQL ─────────────────────────────────────────────────────────
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        let pw = std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "quantai_dev_2026".into());
+    // DATABASE_URL must be set explicitly (or via .env loaded by the launcher).
+    // Falling back to a hardcoded password was the source of the secret-scan
+    // allowlist on .gitleaks.toml — fail loud instead.
+    let db_url = std::env::var("DATABASE_URL").or_else(|_| -> anyhow::Result<String> {
+        let pw = std::env::var("POSTGRES_PASSWORD")
+            .context("POSTGRES_PASSWORD (or DATABASE_URL) must be set — see .env.example")?;
         let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".into());
         let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".into());
         let db = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "quantai".into());
         let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "quantai".into());
-        format!("postgres://{user}:{pw}@{host}:{port}/{db}")
-    });
+        Ok(format!("postgres://{user}:{pw}@{host}:{port}/{db}"))
+    })?;
 
     info!("Connecting to PostgreSQL…");
     let pool = sqlx::PgPool::connect(&db_url)

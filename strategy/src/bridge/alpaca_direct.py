@@ -303,11 +303,9 @@ class AlpacaDirectClient:
         Fills are recorded by reconcile_alpaca_fills.py after market open.
         Non-fatal: DB failures log a warning but do not abort trading.
         """
-        db_url = os.environ.get(
-            "DATABASE_URL",
-            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-        )
         try:
+            from ..db import database_url
+            db_url = database_url()
             import psycopg2
 
             conn = psycopg2.connect(db_url)

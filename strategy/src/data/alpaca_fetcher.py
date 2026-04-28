@@ -117,10 +117,8 @@ class AlpacaFetcher:
             "APCA-API-KEY-ID": api_key,
             "APCA-API-SECRET-KEY": secret_key,
         })
-        self._db_url = os.environ.get(
-            "DATABASE_URL",
-            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-        )
+        from ..db import database_url
+        self._db_url = database_url()
 
     # ── Alpaca data API ───────────────────────────────────────────────────────
 

@@ -47,10 +47,9 @@ def pg_fill_price(fill_id: str) -> str | None:
     """Re-query PostgreSQL to confirm fill_price is stored."""
     try:
         import psycopg2
-        conn = psycopg2.connect(
-            os.environ.get("DATABASE_URL",
-                           "postgres://quantai:quantai_dev_2026@localhost:5432/quantai")
-        )
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from _db import database_url
+        conn = psycopg2.connect(database_url())
         with conn.cursor() as cur:
             cur.execute("SELECT fill_price FROM fills WHERE fill_id = %s", (fill_id,))
             row = cur.fetchone()

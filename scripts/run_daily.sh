@@ -23,7 +23,8 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STRATEGY_DIR="${ROOT}/strategy"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-export DATABASE_URL="${DATABASE_URL:-postgres://quantai:quantai_dev_2026@localhost:5432/quantai}"
+: "${DATABASE_URL:?DATABASE_URL must be set — see .env.example or export it from .env}"
+export DATABASE_URL
 export TRADING_MODE="${TRADING_MODE:-paper}"
 export GCP_PROJECT_ID="${GCP_PROJECT_ID:-quantai-trading-paper}"
 

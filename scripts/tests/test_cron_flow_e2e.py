@@ -433,11 +433,13 @@ def test_morning_report_degrades_gracefully(
     assert result["fills_written"] == 1
     assert result["positions_synced"] is True
 
-    # Now break morning_report's DB access — bogus DSN to unreachable port
+    # Now break morning_report's DB access — point _database_url at an
+    # unreachable port so every psycopg2.connect() in build_report raises
+    # OperationalError (each _query_* swallows it internally).
     monkeypatch.setattr(
         morning_report,
-        "_DB_URL",
-        "postgres://nope:nope@127.0.0.1:1/nope?connect_timeout=1",
+        "_database_url",
+        lambda: "postgres://nope:nope@127.0.0.1:1/nope?connect_timeout=1",
     )
 
     # build_report must NOT raise — every _query_* catches internally

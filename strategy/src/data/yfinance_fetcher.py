@@ -33,10 +33,7 @@ from . import validate_ohlcv
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DSN = os.environ.get(
-    "DATABASE_URL",
-    "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-)
+from ..db import database_url as _database_url
 
 # Internal yfinance tickers for each symbol stored in the DB
 _YFINANCE_TICKER: dict[str, str] = {
@@ -102,8 +99,8 @@ class YfinanceFetcher:
         print(f"Upserted {rows} rows")
     """
 
-    def __init__(self, dsn: str = _DEFAULT_DSN) -> None:
-        self._dsn = dsn
+    def __init__(self, dsn: Optional[str] = None) -> None:
+        self._dsn = dsn or _database_url()
 
     def fetch_and_store(
         self,

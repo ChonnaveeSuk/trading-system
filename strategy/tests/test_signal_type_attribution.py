@@ -212,9 +212,9 @@ def test_missing_signal_type_defaults_to_momentum(caplog):
 # ── Migration idempotency ─────────────────────────────────────────────────────
 
 def _can_connect_local_db() -> bool:
-    db_url = os.environ.get(
-        "DATABASE_URL", "postgres://quantai:quantai_dev_2026@localhost:5432/quantai"
-    )
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return False
     try:
         import psycopg2
         conn = psycopg2.connect(db_url, connect_timeout=3)
@@ -224,14 +224,12 @@ def _can_connect_local_db() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _can_connect_local_db(), reason="local Postgres not available")
+@pytest.mark.skipif(not _can_connect_local_db(), reason="DATABASE_URL unset or local Postgres not available")
 def test_migration_003_idempotent():
     """Run migration_003 twice — no errors, columns exist with correct defaults."""
     import psycopg2
 
-    db_url = os.environ.get(
-        "DATABASE_URL", "postgres://quantai:quantai_dev_2026@localhost:5432/quantai"
-    )
+    db_url = os.environ["DATABASE_URL"]
     migration_path = os.path.join(
         os.path.dirname(__file__),
         "../../infra/postgres/migration_003_signal_type.sql",

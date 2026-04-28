@@ -46,6 +46,7 @@ from src.signals.momentum import MomentumStrategy, MomentumConfig
 from src.backtester.engine import BacktestEngine
 from src.backtester import BacktestConfig
 from src.bridge.client import TradingBridgeClient
+from src.db import database_url as _database_url
 from src.signals import Direction
 
 # When ALPACA_DIRECT=1, live signals go straight to Alpaca REST (no Rust gRPC needed).
@@ -386,11 +387,8 @@ def _check_and_record_regime_change(
     Reads the last stored regime from system_metrics; if it differs from
     current_regime, fires a ⚠️ or 🚨 alert.  Always non-fatal.
     """
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-    )
     try:
+        db_url = _database_url()
         import psycopg2
         import json as _json
 
@@ -469,10 +467,7 @@ def _check_max_drawdown_alert() -> None:
     try:
         import psycopg2
 
-        db_url = os.environ.get(
-            "DATABASE_URL",
-            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-        )
+        db_url = _database_url()
         conn = psycopg2.connect(db_url)
         try:
             with conn.cursor() as cur:

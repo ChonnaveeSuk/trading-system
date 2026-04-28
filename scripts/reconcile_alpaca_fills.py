@@ -37,6 +37,7 @@ try:
 except ImportError:
     def _telegram_alert(message: str, level: str = "INFO") -> bool:  # type: ignore[misc]
         return False
+from _db import database_url as _database_url
 
 try:
     import requests
@@ -435,10 +436,7 @@ def _update_order_status(conn, client_order_id, status: str) -> None:
 
 
 def main() -> None:
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-    )
+    db_url = _database_url()
 
     logger.info("Reconciling Alpaca fills → PostgreSQL…")
     endpoint, api_key, secret_key = _load_credentials()

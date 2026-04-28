@@ -160,10 +160,13 @@ def get_positions(session: requests.Session, endpoint: str) -> list[dict]:
 # ── PostgreSQL helpers ────────────────────────────────────────────────────────
 
 def pg_connect() -> psycopg2.extensions.connection | None:
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-    )
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _db import database_url
+    try:
+        db_url = database_url()
+    except RuntimeError as e:
+        print(f"  ✗  {e}")
+        return None
     try:
         conn = psycopg2.connect(db_url)
         conn.autocommit = False

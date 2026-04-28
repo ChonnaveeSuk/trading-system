@@ -269,12 +269,12 @@ class TestSignalFiltering:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _db_available() -> bool:
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return False
     try:
         import psycopg2
-        conn = psycopg2.connect(
-            "postgres://quantai:quantai_dev_2026@localhost:5432/quantai",
-            connect_timeout=2,
-        )
+        conn = psycopg2.connect(db_url, connect_timeout=2)
         conn.close()
         return True
     except Exception:

@@ -109,7 +109,7 @@ docker compose ps             # all three should show "healthy"
 
 # ── 6. Build + test ───────────────────────────────────────────────────────────
 export PROTOC=/home/<user>/.local/bin/protoc
-export DATABASE_URL=postgres://quantai:quantai_dev_2026@localhost:5432/quantai
+export DATABASE_URL=postgres://quantai:$POSTGRES_PASSWORD@localhost:5432/quantai
 cd core && cargo test         # must show 46 passed
 cd ../strategy && python3 -m pytest tests/ -q  # must show 92 passed
 
