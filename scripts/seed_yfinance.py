@@ -36,6 +36,7 @@ DEFAULT_SYMBOLS = [
     "NEM", "AEM", "AGI", "GOLD", "KGC",
     "URA", "URNM", "DBC", "SCCO", "MP",
     "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
+    "VIXY",  # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
 ]
 DEFAULT_DAYS = 400
 

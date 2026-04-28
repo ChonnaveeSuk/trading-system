@@ -184,6 +184,22 @@ class MomentumConfig:
     regime_ma_period: int = 200       # MA period for regime detection (200 = classic)
     regime_neutral_pct: float = 0.02  # ±2% band around MA200 treated as NEUTRAL
 
+    # VIX (volatility) filter — uses VIXY ETF as VIX proxy via Alpaca IEX feed.
+    # State is derived from a smoothed VIX level = MA(vix_ma_period) of VIXY close:
+    #   CALM    (level < vix_caution_threshold):  no change to signals
+    #   CAUTION (caution ≤ level < panic):        BUY/SELL position size × 0.5
+    #   PANIC   (level ≥ vix_panic_threshold):    ALL new BUY blocked, score=0
+    # SELL signals always pass under PANIC (need to be able to exit).
+    # When VIXY data is missing/stale, defaults to CALM (no blocking).
+    #
+    # Live path:    call strategy.update_vix(vixy_df) before the symbol loop.
+    # Backtest path: pass vix_df=vixy_df to generate_signals_series().
+    vix_filter: bool = True
+    vix_symbol: str = "VIXY"          # VIX proxy ETF (ProShares VIX Short-Term Futures)
+    vix_caution_threshold: float = 20.0   # CALM ↔ CAUTION boundary
+    vix_panic_threshold: float = 30.0     # CAUTION ↔ PANIC boundary
+    vix_ma_period: int = 20               # Smoothing MA period for VIXY close
+
 
 @dataclass
 class MomentumFeatures:
@@ -221,6 +237,10 @@ class MomentumStrategy:
         self._regime: str = "BULL"
         self._spy_price: Optional[float] = None
         self._spy_ma200: Optional[float] = None
+        # Cached VIX state (updated by update_vix(); default CALM = permissive)
+        self._vix_state: str = "CALM"
+        self._vix_level: Optional[float] = None    # smoothed VIXY MA value
+        self._vix_price: Optional[float] = None    # latest raw VIXY close
 
     # ── Market regime ─────────────────────────────────────────────────────────
 
@@ -320,6 +340,105 @@ class MomentumStrategy:
     def current_regime(self) -> str:
         """Return the cached market regime ('BULL', 'NEUTRAL', or 'BEAR')."""
         return self._regime
+
+    # ── VIX (volatility) filter ───────────────────────────────────────────────
+
+    def _classify_vix(self, level: float) -> str:
+        """Map a smoothed VIX level to a state.
+
+        CALM    (level < caution): trade normally
+        CAUTION (caution ≤ level < panic): halve position size on BUY/SELL
+        PANIC   (level ≥ panic):  block all new BUY orders
+        """
+        if level >= self.config.vix_panic_threshold:
+            return "PANIC"
+        if level >= self.config.vix_caution_threshold:
+            return "CAUTION"
+        return "CALM"
+
+    def update_vix(self, vixy_df: pd.DataFrame) -> str:
+        """Compute and cache VIX state from VIXY OHLCV data.
+
+        Call once before the symbol loop in the live path.  The cached state
+        is then applied by every subsequent generate_signal() call.
+
+        Smoothed VIX level = MA(vix_ma_period) of VIXY close.
+        See MomentumConfig.vix_filter for state semantics.
+
+        Args:
+            vixy_df: OHLCV DataFrame for the VIX proxy (default VIXY).
+                     Needs ≥ vix_ma_period bars; falls back to CALM if short.
+
+        Returns:
+            VIX state string: "CALM", "CAUTION", or "PANIC".
+        """
+        if not self.config.vix_filter:
+            return "CALM"  # filter disabled — no-op
+
+        period = self.config.vix_ma_period
+        if vixy_df.empty or len(vixy_df) < period:
+            logger.warning(
+                "Insufficient VIXY data for VIX filter (%d bars, need %d) — defaulting to CALM.",
+                len(vixy_df) if not vixy_df.empty else 0, period,
+            )
+            self._vix_state = "CALM"
+            return "CALM"
+
+        # Staleness check: stale VIXY during a calm-to-panic transition would
+        # leave us trading under outdated permissive state.  >7 days = warn,
+        # >30 days = ignore data and default to CALM.
+        import datetime as _dt
+        latest_date = vixy_df.index[-1]
+        if hasattr(latest_date, "date"):
+            latest_date = latest_date.date()
+        data_age_days = (_dt.date.today() - latest_date).days
+        if data_age_days > 30:
+            logger.warning(
+                "VIXY data is %d days stale (latest bar: %s) — VIX filter "
+                "disabled for this run; defaulting to CALM. "
+                "Run seed_alpaca.py or seed_yfinance.py to refresh.",
+                data_age_days, latest_date,
+            )
+            self._vix_state = "CALM"
+            return "CALM"
+        if data_age_days > 7:
+            logger.warning(
+                "VIXY data is %d days stale (latest bar: %s) — "
+                "VIX state may not reflect current volatility.",
+                data_age_days, latest_date,
+            )
+
+        close = vixy_df["close"]
+        level = float(close.rolling(period).mean().iloc[-1])
+        latest_close = float(close.iloc[-1])
+
+        if np.isnan(level) or level <= 0:
+            self._vix_state = "CALM"
+            return "CALM"
+
+        state = self._classify_vix(level)
+        prev_state = self._vix_state
+        self._vix_state = state
+        self._vix_level = level
+        self._vix_price = latest_close
+
+        logger.info(
+            "VIX state: %s  VIXY=%.2f  MA%d=%.2f",
+            state, latest_close, period, level,
+        )
+        if prev_state != state:
+            logger.warning(
+                "VIX STATE CHANGE: %s → %s  (VIXY MA%d=%.2f, thresholds=%.1f/%.1f)",
+                prev_state, state, period, level,
+                self.config.vix_caution_threshold,
+                self.config.vix_panic_threshold,
+            )
+        return state
+
+    @property
+    def current_vix_state(self) -> str:
+        """Return the cached VIX state ('CALM', 'CAUTION', or 'PANIC')."""
+        return self._vix_state
 
     def generate_signal(
         self,
@@ -596,6 +715,18 @@ class MomentumStrategy:
                     direction = Direction.HOLD
                     score = 0.0
 
+        # ── VIX (volatility) filter ───────────────────────────────────────────
+        # PANIC:   block all new BUY orders entirely (score=0).
+        # CAUTION: position-size halving is applied below in the sizing block.
+        # SELL signals always pass — we still need to be able to exit positions
+        # when fear is rising.
+        # VIXY data must be pre-loaded via update_vix() before calling this.
+        if self.config.vix_filter and direction == Direction.BUY:
+            if self._vix_state == "PANIC":
+                direction = Direction.HOLD
+                score = 0.0
+        # CAUTION sizing halving is applied to qty after the sizing block — see below.
+
         # ── ATR computation ───────────────────────────────────────────────────
         # ATR(atr_period) used for adaptive position sizing and stop placement.
         # Falls back to fixed position_pct sizing when atr_period=0 or ATR is NaN.
@@ -626,6 +757,11 @@ class MomentumStrategy:
                 raw_qty = min(raw_qty, max_qty)
             else:
                 raw_qty = (portfolio_value * position_pct) / curr_price
+
+            # VIX CAUTION: halve raw quantity before instrument rounding so the
+            # rounding step doesn't reintroduce the full size on cheap names.
+            if self.config.vix_filter and self._vix_state == "CAUTION":
+                raw_qty = raw_qty * 0.5
 
             # Instrument-appropriate rounding
             if symbol.endswith("-USD") and curr_price > 1000:
@@ -692,6 +828,9 @@ class MomentumStrategy:
             "regime": self._regime if self.config.regime_filter else "DISABLED",
             "regime_spy_price": round(self._spy_price, 4) if self._spy_price is not None else None,
             "regime_spy_ma200": round(self._spy_ma200, 4) if self._spy_ma200 is not None else None,
+            "vix_state": self._vix_state if self.config.vix_filter else "DISABLED",
+            "vix_level": round(self._vix_level, 4) if self._vix_level is not None else None,
+            "vix_price": round(self._vix_price, 4) if self._vix_price is not None else None,
             "trend_ride": trend_ride_buy,
             "trend_ride_exit_gated": trend_ride_exit_gated,
         }
@@ -711,6 +850,7 @@ class MomentumStrategy:
         symbol: str,
         df: pd.DataFrame,
         regime_df: Optional[pd.DataFrame] = None,
+        vix_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Generate signal for every bar in `df` (used by the backtester).
 
@@ -957,5 +1097,49 @@ class MomentumStrategy:
                     low = buy_mask & (signals["score"] < 0.55)
                     signals.loc[low, "direction"] = Direction.HOLD.value
                     signals.loc[low, "score"] = 0.0
+
+        # ── VIX (volatility) filter (vectorised) ──────────────────────────────
+        # PANIC bars block all new BUY signals (score=0). CAUTION bars do NOT
+        # change direction or score in this series — the position-size haircut
+        # is a sizing-time effect and would only show up if the backtester
+        # re-prices via generate_signal().  We label bars with the state so
+        # downstream consumers (backtester, reports) can reconstruct what
+        # would have been sized differently.
+        signals["vix_state"] = self._vix_state  # default: cached (from update_vix)
+
+        if self.config.vix_filter:
+            if vix_df is not None and not vix_df.empty:
+                vix_close = vix_df["close"]
+                vix_ma_s = vix_close.rolling(
+                    self.config.vix_ma_period,
+                    min_periods=self.config.vix_ma_period,
+                ).mean()
+                # Forward-fill onto signal bars (asset days may differ from VIXY days)
+                vix_level_s = vix_ma_s.reindex(signals.index, method="ffill")
+                has_vix = ~vix_level_s.isna()
+
+                is_panic = has_vix & (vix_level_s >= self.config.vix_panic_threshold)
+                is_caution = (
+                    has_vix
+                    & (vix_level_s >= self.config.vix_caution_threshold)
+                    & (vix_level_s < self.config.vix_panic_threshold)
+                )
+                is_calm = has_vix & (vix_level_s < self.config.vix_caution_threshold)
+
+                signals.loc[is_panic,   "vix_state"] = "PANIC"
+                signals.loc[is_caution, "vix_state"] = "CAUTION"
+                signals.loc[is_calm,    "vix_state"] = "CALM"
+
+                buy_mask = signals["direction"] == Direction.BUY.value
+                panic_buy = buy_mask & is_panic
+                signals.loc[panic_buy, "direction"] = Direction.HOLD.value
+                signals.loc[panic_buy, "score"] = 0.0
+
+            else:
+                # No bar-by-bar data — fall back to cached state for all bars
+                if self._vix_state == "PANIC":
+                    panic_mask = signals["direction"] == Direction.BUY.value
+                    signals.loc[panic_mask, "direction"] = Direction.HOLD.value
+                    signals.loc[panic_mask, "score"] = 0.0
 
         return signals

@@ -36,6 +36,8 @@ _SIGNALS_FILE = "/tmp/quantai_signals_today.json"
 _PAPER_START = date(2026, 4, 7)
 
 _REGIME_EMOJI = {"BULL": "\U0001f7e2", "NEUTRAL": "\U0001f7e1", "BEAR": "\U0001f534"}
+# 😰 CALM, ⚠️ CAUTION, 🚨 PANIC
+_VIX_EMOJI = {"CALM": "\U0001f630", "CAUTION": "⚠️", "PANIC": "\U0001f6a8"}
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -84,6 +86,36 @@ def _query_regime() -> dict:
             conn.close()
     except Exception as e:
         logger.warning("Regime query failed: %s", e)
+    return {}
+
+
+def _query_vix() -> dict:
+    """Return latest VIX state row from system_metrics, or {} if unavailable."""
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT labels, recorded_at
+                    FROM system_metrics
+                    WHERE metric_name = 'vix_state'
+                    ORDER BY recorded_at DESC
+                    LIMIT 1
+                """)
+                row = cur.fetchone()
+                if row:
+                    labels, _ = row
+                    if not isinstance(labels, dict):
+                        labels = json.loads(labels or "{}")
+                    return {
+                        "vix_state": labels.get("vix_state", ""),
+                        "vix_level": float(labels.get("vix_level", 0.0)),
+                        "vix_price": float(labels.get("vix_price", 0.0)),
+                    }
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("VIX query failed: %s", e)
     return {}
 
 
@@ -344,6 +376,7 @@ def build_report() -> tuple[str, str]:
     yesterday_label = yesterday.strftime("%b %d")
 
     regime_data = _query_regime()
+    vix_data = _query_vix()
     pnl_data = _query_pnl()
     gate_data = _query_gate()
     signals_data = _load_signals()
@@ -364,6 +397,15 @@ def build_report() -> tuple[str, str]:
         regime_section = f"\U0001f30d Market Regime: {r_emoji} {regime}"
     else:
         regime_section = "\U0001f30d Market Regime: \u26aa UNKNOWN (no data yet)"
+
+    # \u2500\u2500 VIX (volatility) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    vix_state = vix_data.get("vix_state", "")
+    vix_level = vix_data.get("vix_level", 0.0)
+    if vix_state:
+        v_emoji = _VIX_EMOJI.get(vix_state, "\u26aa")
+        vix_section = f"{v_emoji} VIX: {vix_level:.1f} ({vix_state})"
+    else:
+        vix_section = None
 
     # ── Signals ───────────────────────────────────────────────────────────────
     buy_count = int(signals_data.get("buy", 0))
@@ -502,8 +544,10 @@ def build_report() -> tuple[str, str]:
     sections = [
         f"QuantAI Morning Report \u2014 {today.isoformat()}",
         regime_section,
-        signals_section,
     ]
+    if vix_section:
+        sections.append(vix_section)
+    sections.append(signals_section)
     if ab_section:
         sections.append(ab_section)
     if sector_section:

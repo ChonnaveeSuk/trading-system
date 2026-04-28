@@ -37,7 +37,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("seed_alpaca")
 
-# All 31 production symbols (matches CLAUDE.md capital simulation)
+# All 31 production symbols (matches CLAUDE.md capital simulation) + data-only proxies.
+# VIXY: not traded — used as the VIX (volatility/fear) proxy by MomentumStrategy.update_vix().
 DEFAULT_SYMBOLS = [
     "BTC-USD", "BNB-USD",
     "GLD", "IAU", "SLV",
@@ -45,6 +46,7 @@ DEFAULT_SYMBOLS = [
     "NEM", "AEM", "AGI", "GOLD", "KGC",
     "URA", "URNM", "DBC", "SCCO", "MP",
     "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
+    "VIXY",  # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
 ]
 DEFAULT_DAYS = 400
 

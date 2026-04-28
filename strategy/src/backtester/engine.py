@@ -88,6 +88,7 @@ class BacktestEngine:
         starting_capital: float = 100_000.0,
         position_pct: float = 0.02,
         regime_df: Optional[pd.DataFrame] = None,
+        vix_df: Optional[pd.DataFrame] = None,
     ) -> BacktestResult:
         """Run a backtest on the given OHLCV DataFrame.
 
@@ -119,8 +120,10 @@ class BacktestEngine:
                 len(df),
             )
 
-        # Generate signals for all bars (with optional bar-by-bar regime filter)
-        signals = strategy.generate_signals_series(symbol, df, regime_df=regime_df)
+        # Generate signals for all bars (with optional bar-by-bar regime + VIX filters)
+        signals = strategy.generate_signals_series(
+            symbol, df, regime_df=regime_df, vix_df=vix_df,
+        )
 
         start_date = str(df.index[0].date())
         end_date = str(df.index[-1].date())
@@ -375,6 +378,7 @@ class BacktestEngine:
         starting_capital: float = 100_000.0,
         position_pct: float = 0.02,
         regime_df: Optional[pd.DataFrame] = None,
+        vix_df: Optional[pd.DataFrame] = None,
     ) -> WalkForwardSummary:
         """Run a rolling walk-forward backtest.
 
@@ -422,10 +426,10 @@ class BacktestEngine:
             oos_df = df.iloc[i + is_days : i + min_bars]
 
             # Generate signals on the combined window (rolling MA, no lookahead).
-            # Pass regime_df for bar-by-bar regime filtering; None = no filter.
+            # Pass regime_df + vix_df for bar-by-bar filtering; None = no filter.
             try:
                 all_signals = strategy.generate_signals_series(
-                    symbol, window_df, regime_df=regime_df
+                    symbol, window_df, regime_df=regime_df, vix_df=vix_df,
                 )
             except ValueError:
                 i += step

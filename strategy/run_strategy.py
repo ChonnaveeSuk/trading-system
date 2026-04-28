@@ -123,7 +123,27 @@ def run_backtest(symbols: list[str]) -> None:
 
         regime_df_arg = spy_df if not spy_df.empty else None
 
+        # ── Fetch VIXY for bar-by-bar VIX filter ──────────────────────────────
+        vix_df: pd.DataFrame = pd.DataFrame()
+        if cfg.vix_filter:
+            vix_df = fetcher.fetch(cfg.vix_symbol, days=700)
+            if vix_df.empty:
+                logger.warning(
+                    "%s data not available — VIX filter disabled for backtest",
+                    cfg.vix_symbol,
+                )
+            else:
+                _tmp_v = MomentumStrategy(cfg)
+                vstate = _tmp_v.update_vix(vix_df)
+                if _tmp_v._vix_level:
+                    print(f"  VIX state: {vstate}  {cfg.vix_symbol}=${_tmp_v._vix_price:.2f}  "
+                          f"MA{cfg.vix_ma_period}=${_tmp_v._vix_level:.2f}  "
+                          f"thresholds={cfg.vix_caution_threshold:.0f}/{cfg.vix_panic_threshold:.0f}")
+        vix_df_arg = vix_df if not vix_df.empty else None
+
         for symbol in symbols:
+            if symbol == cfg.vix_symbol:
+                continue  # VIX proxy is a data source, not a tradable target
             df = fetcher.fetch(symbol, days=700)
             if df.empty:
                 print(f"  {symbol}: no data — skipping")
@@ -137,10 +157,10 @@ def run_backtest(symbols: list[str]) -> None:
             if regime_df_arg is not None:
                 try:
                     sigs_raw = MomentumStrategy(
-                        MomentumConfig(**{**cfg.__dict__, "regime_filter": False})
+                        MomentumConfig(**{**cfg.__dict__, "regime_filter": False, "vix_filter": False})
                     ).generate_signals_series(symbol, df)
                     sigs_filtered = strategy.generate_signals_series(
-                        symbol, df, regime_df=regime_df_arg
+                        symbol, df, regime_df=regime_df_arg, vix_df=vix_df_arg,
                     )
                     buys_raw = int((sigs_raw["direction"] == "BUY").sum())
                     buys_filtered = int((sigs_filtered["direction"] == "BUY").sum())
@@ -152,17 +172,23 @@ def run_backtest(symbols: list[str]) -> None:
                 print("\n" + "=" * 70)
                 print(f" WALK-FORWARD BACKTEST — {symbol}  ({bars} bars)")
                 if blocked_buys > 0:
-                    print(f" Regime filter: {blocked_buys} BUY signal(s) blocked")
+                    print(f" Regime+VIX filter: {blocked_buys} BUY signal(s) blocked")
                 print("=" * 70)
-                wf = engine.walk_forward(symbol, df, strategy, regime_df=regime_df_arg)
+                wf = engine.walk_forward(
+                    symbol, df, strategy,
+                    regime_df=regime_df_arg, vix_df=vix_df_arg,
+                )
                 _print_walkforward(wf)
             else:
                 print("\n" + "=" * 70)
                 print(f" SINGLE-PASS BACKTEST (DEV) — {symbol}  ({bars} bars, need ≥{PROD_MIN})")
                 if blocked_buys > 0:
-                    print(f" Regime filter: {blocked_buys} BUY signal(s) blocked")
+                    print(f" Regime+VIX filter: {blocked_buys} BUY signal(s) blocked")
                 print("=" * 70)
-                result = engine.run(symbol, df, strategy, regime_df=regime_df_arg)
+                result = engine.run(
+                    symbol, df, strategy,
+                    regime_df=regime_df_arg, vix_df=vix_df_arg,
+                )
                 gate = "✓ PASS" if result.passes_gate() else "✗ FAIL"
                 print(f"\n  {gate}  {result.summary()}")
                 for note in result.notes:
@@ -275,6 +301,31 @@ def run_live(symbols: list[str]) -> None:
             counts["regime"] = regime  # type: ignore[assignment]  # str in int dict — OK
             counts["regime_spy_price"] = round(spy_price, 2)   # type: ignore[assignment]
             counts["regime_spy_ma200"] = round(spy_ma200, 2)   # type: ignore[assignment]
+
+        # ── VIX (volatility) detection — drives BUY blocking and size halving ─
+        if strategy.config.vix_filter:
+            vixy_days = max(strategy.config.vix_ma_period * 4, 90)
+            vixy_df = fetcher.fetch(strategy.config.vix_symbol, days=vixy_days)
+            vix_state = strategy.update_vix(vixy_df)
+            vix_level = strategy._vix_level or 0.0
+            vix_price = strategy._vix_price or 0.0
+            if vix_level > 0:
+                print(f"  VIX state: {vix_state}  "
+                      f"{strategy.config.vix_symbol}=${vix_price:.2f}  "
+                      f"MA{strategy.config.vix_ma_period}=${vix_level:.2f}  "
+                      f"thresholds={strategy.config.vix_caution_threshold:.0f}/"
+                      f"{strategy.config.vix_panic_threshold:.0f}")
+            else:
+                print(f"  VIX state: {vix_state} (no VIXY data — defaulting to permissive)")
+            if vix_state == "PANIC":
+                print(f"  [VIX] PANIC — all BUY signals suppressed")
+            elif vix_state == "CAUTION":
+                print(f"  [VIX] CAUTION — BUY/SELL position size halved")
+            _check_and_record_vix_change(vix_state, vix_level, vix_price)
+            counts["vix_state"] = vix_state           # type: ignore[assignment]
+            counts["vix_level"] = round(vix_level, 2) # type: ignore[assignment]
+            counts["vix_price"] = round(vix_price, 2) # type: ignore[assignment]
+
         for symbol in symbols:
             # 90 calendar days ≈ 63 trading days — enough for stable RSI(7)+ATR(14)
             # context and for trend_ride_min_bars consecutive-uptrend detection.
@@ -460,6 +511,87 @@ def _check_and_record_regime_change(
 
     except Exception as e:
         logger.debug("Regime record/alert failed (non-fatal): %s", e)
+
+
+def _check_and_record_vix_change(
+    current_state: str,
+    vix_level: float,
+    vix_price: float,
+) -> None:
+    """Persist VIX state to system_metrics and Telegram-alert on threshold cross.
+
+    Reads the last stored vix_state; if it differs from current_state, fires
+    an alert sized to the new state (PANIC=CRITICAL, CAUTION=WARNING,
+    CALM=INFO). Always non-fatal.
+    """
+    try:
+        import psycopg2
+        import json as _json
+
+        db_url = _database_url()
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT labels->>'vix_state'
+                    FROM system_metrics
+                    WHERE metric_name = 'vix_state'
+                    ORDER BY recorded_at DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                last_state = row[0] if row else None
+
+                # Encode VIX state as numeric for time-series Grafana panels
+                state_value = {"CALM": 0.0, "CAUTION": 1.0, "PANIC": 2.0}.get(current_state, 0.0)
+
+                cur.execute(
+                    """
+                    INSERT INTO system_metrics (metric_name, metric_value, labels)
+                    VALUES ('vix_state', %s, %s)
+                    """,
+                    (
+                        state_value,
+                        _json.dumps({
+                            "vix_state": current_state,
+                            "vix_level": round(vix_level, 4),
+                            "vix_price": round(vix_price, 4),
+                        }),
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        if last_state and last_state != current_state:
+            transition = f"{last_state} → {current_state}"
+            if current_state == "PANIC":
+                msg = (
+                    f"VIX State Change: {transition}\n"
+                    f"VIXY MA20: {vix_level:.2f} | Last close: ${vix_price:.2f}\n"
+                    f"PANIC: all new BUY orders blocked until volatility subsides."
+                )
+                _telegram_alert(msg, level="CRITICAL")
+            elif current_state == "CAUTION":
+                msg = (
+                    f"VIX State Change: {transition}\n"
+                    f"VIXY MA20: {vix_level:.2f} | Last close: ${vix_price:.2f}\n"
+                    f"CAUTION: position sizes halved on BUY/SELL."
+                )
+                _telegram_alert(msg, level="WARNING")
+            else:  # CALM
+                msg = (
+                    f"VIX State Change: {transition}\n"
+                    f"VIXY MA20: {vix_level:.2f} | Last close: ${vix_price:.2f}\n"
+                    f"CALM: full position sizing restored."
+                )
+                _telegram_alert(msg, level="INFO")
+            logger.info("VIX state change alert sent: %s", transition)
+
+    except Exception as e:
+        logger.debug("VIX state record/alert failed (non-fatal): %s", e)
 
 
 def _check_max_drawdown_alert() -> None:
