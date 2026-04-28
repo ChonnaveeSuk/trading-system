@@ -454,7 +454,7 @@ impl OmsManager {
         // Fall back to DB for orders evicted from memory
         let row = sqlx::query!(
             "SELECT status FROM orders WHERE client_order_id = $1",
-            client_order_id
+            client_order_id.to_string()
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -503,7 +503,7 @@ impl OmsManager {
                 limit_price, stop_price, stop_loss, signal_score, strategy_id,
                 status, created_at, updated_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
-            order.client_order_id,
+            order.client_order_id.to_string(),
             order.symbol,
             order.side.to_string(),
             order_type_str,
@@ -536,7 +536,7 @@ impl OmsManager {
                WHERE client_order_id = $3"#,
             status.to_string(),
             broker_order_id,
-            client_order_id,
+            client_order_id.to_string(),
         )
         .execute(&self.pool)
         .await?;
@@ -550,7 +550,7 @@ impl OmsManager {
                 filled_quantity, fill_price, commission, timestamp, strategy_id)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
             fill.fill_id,
-            fill.client_order_id,
+            fill.client_order_id.to_string(),
             fill.broker_order_id,
             fill.symbol,
             fill.side.to_string(),
