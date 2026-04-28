@@ -69,17 +69,27 @@ def make_buy_scenario(n: int = 300) -> pd.DataFrame:
 class TestUpdateVix:
     """update_vix() must classify CALM / CAUTION / PANIC correctly."""
 
+    def _cfg(self, **kw):
+        # Pin spec thresholds (20/30) so these tests stay independent of the
+        # production defaults, which were re-tuned for VIXY's $30–50 band.
+        return MomentumConfig(
+            vix_ma_period=20,
+            vix_caution_threshold=20.0,
+            vix_panic_threshold=30.0,
+            **kw,
+        )
+
     def test_calm_below_caution_threshold(self):
-        s = MomentumStrategy(MomentumConfig(vix_ma_period=20))
+        s = MomentumStrategy(self._cfg())
         assert s.update_vix(make_vixy(15.0)) == "CALM"
         assert s.current_vix_state == "CALM"
 
     def test_caution_between_thresholds(self):
-        s = MomentumStrategy(MomentumConfig(vix_ma_period=20))
+        s = MomentumStrategy(self._cfg())
         assert s.update_vix(make_vixy(25.0)) == "CAUTION"
 
     def test_panic_above_panic_threshold(self):
-        s = MomentumStrategy(MomentumConfig(vix_ma_period=20))
+        s = MomentumStrategy(self._cfg())
         assert s.update_vix(make_vixy(35.0)) == "PANIC"
 
     def test_caution_threshold_inclusive(self):
@@ -260,6 +270,7 @@ class TestGenerateSignalsSeriesVix:
         s = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,
             regime_filter=False, vix_filter=True, vix_ma_period=20,
+            vix_caution_threshold=20.0, vix_panic_threshold=30.0,
         ))
         sigs = s.generate_signals_series("TEST", df, vix_df=vix)
         # After MA20 warm-up, every bar is in PANIC
@@ -277,10 +288,12 @@ class TestGenerateSignalsSeriesVix:
         s_calm = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,
             regime_filter=False, vix_filter=True, vix_ma_period=20,
+            vix_caution_threshold=20.0, vix_panic_threshold=30.0,
         ))
         s_panic = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,
             regime_filter=False, vix_filter=True, vix_ma_period=20,
+            vix_caution_threshold=20.0, vix_panic_threshold=30.0,
         ))
         sigs_calm  = s_calm.generate_signals_series("TEST", df, vix_df=vix_calm)
         sigs_panic = s_panic.generate_signals_series("TEST", df, vix_df=vix_panic)
@@ -297,6 +310,7 @@ class TestGenerateSignalsSeriesVix:
         s = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,
             regime_filter=False, vix_filter=True, vix_ma_period=20,
+            vix_caution_threshold=20.0, vix_panic_threshold=30.0,
         ))
         sigs = s.generate_signals_series("TEST", df, vix_df=vix)
         assert "vix_state" in sigs.columns
@@ -321,6 +335,7 @@ class TestGenerateSignalsSeriesVix:
         s_panic = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,
             regime_filter=False, vix_filter=True, vix_ma_period=20,
+            vix_caution_threshold=20.0, vix_panic_threshold=30.0,
         ))
         s_off = MomentumStrategy(MomentumConfig(
             fast_period=5, slow_period=15, vol_period=10,

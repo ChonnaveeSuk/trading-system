@@ -185,10 +185,38 @@ class MomentumConfig:
     regime_neutral_pct: float = 0.02  # ±2% band around MA200 treated as NEUTRAL
 
     # VIX (volatility) filter — uses VIXY ETF as VIX proxy via Alpaca IEX feed.
-    # State is derived from a smoothed VIX level = MA(vix_ma_period) of VIXY close:
-    #   CALM    (level < vix_caution_threshold):  no change to signals
-    #   CAUTION (caution ≤ level < panic):        BUY/SELL position size × 0.5
-    #   PANIC   (level ≥ vix_panic_threshold):    ALL new BUY blocked, score=0
+    #
+    # Two scoring modes (vix_mode):
+    #
+    #   "absolute" — raw VIXY MA price vs absolute thresholds.  WINNING MODE.
+    #     Original spec assumed VIX-index scale (20/30); VIXY price scale is
+    #     ~$30–50, so the calibrated defaults below are 45/60.  Tuned via the
+    #     scripts/vix_threshold_sweep.py harness on the 29-symbol production
+    #     universe, 700-day window (vs OFF baseline Sharpe 1.054):
+    #
+    #       Candidate                Sharpe   ΔSharpe   Trades   PANIC/250d
+    #       ───────────────────────  ──────   ───────   ──────   ──────────
+    #       absolute 30/40            0.847    -0.207     236         79
+    #       absolute 35/50            0.969    -0.086     320         43
+    #       absolute 40/55            1.018    -0.036     331         22
+    #       absolute 45/60 (default)  1.027    -0.027     333         14   ← winner
+    #       absolute 20/30 (orig)     0.578    -0.476     162        192   ← too tight
+    #
+    #     45/60 keeps Sharpe within 0.03 of OFF while still firing PANIC on
+    #     14 trailing-year bars — the filter is doing real work, not dead
+    #     code.  Adjust if VIXY's price band shifts structurally.
+    #
+    #   "relative" — score VIXY MA against its own 252-day low.
+    #     score = (vixy_ma − low_252d) / low_252d
+    #     CALM    (score < vix_caution_pct):  trade normally
+    #     CAUTION (caution_pct ≤ score < panic_pct): position size × 0.5
+    #     PANIC   (score ≥ vix_panic_pct):     block all new BUY
+    #     Self-calibrating to the local VIXY band but on the production data
+    #     all (caution_pct, panic_pct) ∈ {0.20…0.50} × {0.50…1.00} converged
+    #     to the same outcome (Sharpe 0.812, 75 trades blocked) — the
+    #     mode is too sensitive when VIXY rises after a long quiet stretch.
+    #     Kept as a config option, not the default.
+    #
     # SELL signals always pass under PANIC (need to be able to exit).
     # When VIXY data is missing/stale, defaults to CALM (no blocking).
     #
@@ -196,8 +224,12 @@ class MomentumConfig:
     # Backtest path: pass vix_df=vixy_df to generate_signals_series().
     vix_filter: bool = True
     vix_symbol: str = "VIXY"          # VIX proxy ETF (ProShares VIX Short-Term Futures)
-    vix_caution_threshold: float = 20.0   # CALM ↔ CAUTION boundary
-    vix_panic_threshold: float = 30.0     # CAUTION ↔ PANIC boundary
+    vix_mode: str = "absolute"        # "absolute" | "relative"
+    vix_caution_threshold: float = 45.0   # absolute mode: CALM ↔ CAUTION boundary on VIXY MA price
+    vix_panic_threshold: float = 60.0     # absolute mode: CAUTION ↔ PANIC boundary on VIXY MA price
+    vix_caution_pct: float = 0.20         # relative mode: (vixy_ma − low_252d)/low_252d ≥ this → CAUTION
+    vix_panic_pct: float = 0.50           # relative mode: ≥ this → PANIC
+    vix_low_lookback: int = 252           # relative mode: lookback window for the rolling low
     vix_ma_period: int = 20               # Smoothing MA period for VIXY close
 
 
@@ -343,16 +375,26 @@ class MomentumStrategy:
 
     # ── VIX (volatility) filter ───────────────────────────────────────────────
 
-    def _classify_vix(self, level: float) -> str:
-        """Map a smoothed VIX level to a state.
+    def _classify_vix(self, score: float) -> str:
+        """Map a VIX score (mode-dependent) to a state.
 
-        CALM    (level < caution): trade normally
-        CAUTION (caution ≤ level < panic): halve position size on BUY/SELL
-        PANIC   (level ≥ panic):  block all new BUY orders
+        absolute: score = VIXY MA20 price; thresholds are absolute prices.
+        relative: score = (VIXY MA20 − rolling_low_252d) / rolling_low_252d;
+                  thresholds are fractions (e.g. 0.20 = 20% above the low).
+
+        CALM    (score < caution): trade normally
+        CAUTION (caution ≤ score < panic): halve position size on BUY
+        PANIC   (score ≥ panic):  block all new BUY orders
         """
-        if level >= self.config.vix_panic_threshold:
+        if self.config.vix_mode == "relative":
+            caution = self.config.vix_caution_pct
+            panic = self.config.vix_panic_pct
+        else:
+            caution = self.config.vix_caution_threshold
+            panic = self.config.vix_panic_threshold
+        if score >= panic:
             return "PANIC"
-        if level >= self.config.vix_caution_threshold:
+        if score >= caution:
             return "CAUTION"
         return "CALM"
 
@@ -409,29 +451,50 @@ class MomentumStrategy:
             )
 
         close = vixy_df["close"]
-        level = float(close.rolling(period).mean().iloc[-1])
+        ma_level = float(close.rolling(period).mean().iloc[-1])
         latest_close = float(close.iloc[-1])
 
-        if np.isnan(level) or level <= 0:
+        if np.isnan(ma_level) or ma_level <= 0:
             self._vix_state = "CALM"
             return "CALM"
 
-        state = self._classify_vix(level)
+        # Mode-dependent score: absolute MA price OR % above 252d low
+        if self.config.vix_mode == "relative":
+            lookback = self.config.vix_low_lookback
+            if len(close) < lookback:
+                logger.warning(
+                    "VIXY history too short for relative mode (%d < %d) — defaulting to CALM.",
+                    len(close), lookback,
+                )
+                self._vix_state = "CALM"
+                self._vix_level = ma_level
+                self._vix_price = latest_close
+                return "CALM"
+            low = float(close.rolling(lookback).min().iloc[-1])
+            if np.isnan(low) or low <= 0:
+                self._vix_state = "CALM"
+                return "CALM"
+            score = (ma_level - low) / low
+            score_label = f"pct_above_{lookback}d_low={score*100:.1f}%"
+        else:
+            score = ma_level
+            score_label = f"MA{period}=${ma_level:.2f}"
+
+        state = self._classify_vix(score)
         prev_state = self._vix_state
         self._vix_state = state
-        self._vix_level = level
+        self._vix_level = ma_level
         self._vix_price = latest_close
 
-        logger.info(
-            "VIX state: %s  VIXY=%.2f  MA%d=%.2f",
-            state, latest_close, period, level,
-        )
+        logger.info("VIX state: %s  VIXY=%.2f  %s", state, latest_close, score_label)
         if prev_state != state:
+            if self.config.vix_mode == "relative":
+                thr = (self.config.vix_caution_pct, self.config.vix_panic_pct)
+            else:
+                thr = (self.config.vix_caution_threshold, self.config.vix_panic_threshold)
             logger.warning(
-                "VIX STATE CHANGE: %s → %s  (VIXY MA%d=%.2f, thresholds=%.1f/%.1f)",
-                prev_state, state, period, level,
-                self.config.vix_caution_threshold,
-                self.config.vix_panic_threshold,
+                "VIX STATE CHANGE: %s → %s  (mode=%s, score=%.4f, thresholds=%.4f/%.4f)",
+                prev_state, state, self.config.vix_mode, score, thr[0], thr[1],
             )
         return state
 
@@ -1114,17 +1177,29 @@ class MomentumStrategy:
                     self.config.vix_ma_period,
                     min_periods=self.config.vix_ma_period,
                 ).mean()
-                # Forward-fill onto signal bars (asset days may differ from VIXY days)
-                vix_level_s = vix_ma_s.reindex(signals.index, method="ffill")
-                has_vix = ~vix_level_s.isna()
 
-                is_panic = has_vix & (vix_level_s >= self.config.vix_panic_threshold)
+                if self.config.vix_mode == "relative":
+                    lookback = self.config.vix_low_lookback
+                    low_s = vix_close.rolling(lookback, min_periods=lookback).min()
+                    score_s = (vix_ma_s - low_s).where(low_s > 0) / low_s.where(low_s > 0)
+                    caution_thr = self.config.vix_caution_pct
+                    panic_thr = self.config.vix_panic_pct
+                else:
+                    score_s = vix_ma_s
+                    caution_thr = self.config.vix_caution_threshold
+                    panic_thr = self.config.vix_panic_threshold
+
+                # Forward-fill onto signal bars (asset days may differ from VIXY days)
+                score_aligned = score_s.reindex(signals.index, method="ffill")
+                has_vix = ~score_aligned.isna()
+
+                is_panic = has_vix & (score_aligned >= panic_thr)
                 is_caution = (
                     has_vix
-                    & (vix_level_s >= self.config.vix_caution_threshold)
-                    & (vix_level_s < self.config.vix_panic_threshold)
+                    & (score_aligned >= caution_thr)
+                    & (score_aligned < panic_thr)
                 )
-                is_calm = has_vix & (vix_level_s < self.config.vix_caution_threshold)
+                is_calm = has_vix & (score_aligned < caution_thr)
 
                 signals.loc[is_panic,   "vix_state"] = "PANIC"
                 signals.loc[is_caution, "vix_state"] = "CAUTION"
