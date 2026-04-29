@@ -59,27 +59,23 @@ PRODUCTION_MIN_BARS = 252  # Per design — flag if below this
 # Drives the sector concentration gate in alpaca_direct.py and the sector
 # exposure section in scripts/morning_report.py. Symbols not listed here fall
 # back to "other" — keep in sync with the trading universe.
+# Tech-focus rebalance (2026-04-29): replaced the 30-symbol precious-metals-heavy
+# universe after 100% concentration in precious_metals → -$4,825 cumulative loss.
+# GLD retained as a defensive hedge; all other PM names dropped.
 SYMBOL_TO_SECTOR: dict[str, str] = {
-    # Precious metals (root cause of 2026-04-28 100% concentration incident)
-    "GLD": "precious_metals", "IAU": "precious_metals",
-    "SLV": "precious_metals", "GDX": "precious_metals", "GDXJ": "precious_metals",
-    "RING": "precious_metals", "PAAS": "precious_metals", "SILJ": "precious_metals",
-    "WPM": "precious_metals", "HL": "precious_metals", "CDE": "precious_metals",
-    "NEM": "precious_metals", "AEM": "precious_metals", "AGI": "precious_metals",
-    "GOLD": "precious_metals", "KGC": "precious_metals",
-    # Tech
-    "AAPL": "tech", "MSFT": "tech", "NVDA": "tech", "XLK": "tech",
+    # Big Tech
+    "AAPL": "big_tech", "MSFT": "big_tech", "NVDA": "big_tech",
+    "GOOGL": "big_tech", "META": "big_tech",
+    # Tech ETFs
+    "QQQ": "tech_etf", "XLK": "tech_etf", "SMH": "tech_etf",
+    # Growth (high-beta single names)
+    "TSLA": "growth", "AMD": "growth", "AVGO": "growth",
     # Broad-market equity
-    "SPY": "broad_market", "QQQ": "broad_market", "IWM": "broad_market",
-    # Bonds
-    "TLT": "bonds",
-    # Emerging markets
-    "EEM": "emerging",
+    "SPY": "broad_market", "IWM": "broad_market",
     # Crypto
-    "BTC-USD": "crypto", "BNB-USD": "crypto",
-    # Commodities (broad + uranium + industrial metals)
-    "DBC": "commodities", "SCCO": "commodities", "MP": "commodities",
-    "URA": "commodities", "URNM": "commodities",
+    "BTC-USD": "crypto",
+    # Defensive (gold + long-duration bonds — risk-off hedges)
+    "GLD": "defensive", "TLT": "defensive",
 }
 
 

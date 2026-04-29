@@ -33,41 +33,23 @@ from src.signals.momentum import MomentumConfig, MomentumStrategy
 STARTING_CAPITAL_USD = 28_000.0   # 1,000,000 THB ÷ 35.7
 THB_PER_USD          = 35.7
 POSITION_PCT         = 0.05       # 5% max position per trade
-# 31 symbols — selected by per-symbol backtest (all net-positive with 5/15/10).
-# Dominant theme: precious metals bull 2024 (gold ATH, silver +60%, miners levered).
-# Risk note: gold/silver miners are highly correlated — max concurrent positions gated
-# by the 5% risk limit and 20% max-drawdown halt in the Rust risk engine.
+# Tech-focused 16-symbol universe (rebalance 2026-04-29).
+# Replaces the 30-symbol precious-metals-heavy universe that caused the
+# 2026-04-28 100%-concentration incident (-$4,825 cumulative).
+# Sector caps: max 3 positions / 30% notional per sector.
 SYMBOLS = [
-    # Crypto (BTC bull 2024 — $100K ATH)
-    "BTC-USD", "BNB-USD",
-    # Gold ETFs
-    "GLD", "IAU",
-    # Silver ETFs
-    "SLV",
-    # Gold/silver miner ETFs
-    "GDX", "GDXJ", "RING",
-    # Individual silver miners (high leverage to silver price)
-    "PAAS", "SILJ", "WPM", "HL", "CDE",
-    # Individual gold miners
-    "NEM", "AEM", "AGI", "GOLD", "KGC",
-    # Uranium (bull 2024)
-    "URA", "URNM",
-    # Commodity ETFs
-    "DBC",
-    # Copper miner
-    "SCCO",
-    # Rare earth
-    "MP",
-    # US equity ETFs
-    "SPY", "QQQ", "IWM", "XLK",
-    # Individual US equity
-    "AAPL",
-    # Bonds
-    "TLT",
-    # Emerging markets
-    "EEM",
-    # FX
-    "GBP-USD",
+    # Big Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META",
+    # Tech ETFs
+    "QQQ", "XLK", "SMH",
+    # Growth (high-beta single names)
+    "TSLA", "AMD", "AVGO",
+    # Broad market
+    "SPY", "IWM",
+    # Crypto
+    "BTC-USD",
+    # Defensive
+    "GLD", "TLT",
 ]
 OUTPUT_PATH          = os.path.join(os.path.dirname(__file__), "1m_thb_simulation.json")
 

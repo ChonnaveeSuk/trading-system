@@ -59,20 +59,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_strategy")
 
+# Tech-focused 16-symbol universe (replaces the 30-symbol precious-metals-heavy
+# universe that caused 2026-04-28 100% concentration → -$4,825 cumulative loss).
+# Sector caps still apply (max 3 positions / 30% notional per sector).
 SYMBOLS = [
-    "BTC-USD", "BNB-USD",
-    "GLD", "IAU", "SLV",
-    "GDX", "GDXJ", "RING", "PAAS", "SILJ", "WPM", "HL", "CDE",
-    "NEM", "AEM", "AGI", "GOLD", "KGC",
-    "URA", "URNM", "DBC", "SCCO", "MP",
-    "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
+    # Big Tech (sector: big_tech)
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META",
+    # Tech ETFs (sector: tech_etf)
+    "QQQ", "XLK", "SMH",
+    # Growth (sector: growth)
+    "TSLA", "AMD", "AVGO",
+    # Broad market (sector: broad_market)
+    "SPY", "IWM",
+    # Crypto (sector: crypto)
+    "BTC-USD",
+    # Defensive (sector: defensive)
+    "GLD", "TLT",
 ]
 
-# Live trading symbols — excludes instruments not tradeable on Alpaca paper:
-#   BNB-USD: not listed on Alpaca (data frozen since Mar 29; spurious signals)
-#   GBP-USD: FX — Alpaca paper does not support spot FX
-#   EUR-USD: FX — same
-LIVE_SYMBOLS = [s for s in SYMBOLS if s not in {"BNB-USD", "GBP-USD", "EUR-USD"}]
+# All 16 symbols are Alpaca-paper-tradeable.
+LIVE_SYMBOLS = list(SYMBOLS)
 
 # Max calendar days of staleness before skipping a symbol in live mode.
 # 5 trading days = 7 calendar days covers weekends + 1 holiday.

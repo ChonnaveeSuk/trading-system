@@ -30,13 +30,20 @@ logging.basicConfig(
 logger = logging.getLogger("seed_yfinance")
 
 DEFAULT_SYMBOLS = [
-    "BTC-USD", "BNB-USD",
-    "GLD", "IAU", "SLV",
-    "GDX", "GDXJ", "RING", "PAAS", "SILJ", "WPM", "HL", "CDE",
-    "NEM", "AEM", "AGI", "GOLD", "KGC",
-    "URA", "URNM", "DBC", "SCCO", "MP",
-    "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
-    "VIXY",  # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
+    # Big Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META",
+    # Tech ETFs
+    "QQQ", "XLK", "SMH",
+    # Growth
+    "TSLA", "AMD", "AVGO",
+    # Broad market (also used as regime proxy)
+    "SPY", "IWM",
+    # Crypto
+    "BTC-USD",
+    # Defensive
+    "GLD", "TLT",
+    # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
+    "VIXY",
 ]
 DEFAULT_DAYS = 400
 

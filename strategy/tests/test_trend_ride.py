@@ -360,23 +360,23 @@ class TestTrendRideInBacktester:
 class TestLiveSymbols:
 
     def test_live_symbols_excludes_untradeable(self):
+        """Post tech-rebalance (2026-04-29): no untradeable FX/BNB names remain
+        in either SYMBOLS or LIVE_SYMBOLS. The exclusion guard is defensive."""
         from run_strategy import LIVE_SYMBOLS, SYMBOLS
 
-        # BNB-USD and GBP-USD are in SYMBOLS (backtest) but must not be in LIVE_SYMBOLS
-        for sym in ("BNB-USD", "GBP-USD"):
-            assert sym in SYMBOLS, f"{sym} should be in full SYMBOLS list"
-            assert sym not in LIVE_SYMBOLS, f"{sym} should be excluded from LIVE_SYMBOLS"
-
-        # EUR-USD was excluded from production SYMBOLS entirely (net-negative backtest)
-        assert "EUR-USD" not in LIVE_SYMBOLS
+        for sym in ("BNB-USD", "GBP-USD", "EUR-USD"):
+            assert sym not in LIVE_SYMBOLS, f"{sym} must be excluded from LIVE_SYMBOLS"
+            assert sym not in SYMBOLS, f"{sym} must be excluded from SYMBOLS too"
 
     def test_live_symbols_subset_of_symbols(self):
         from run_strategy import LIVE_SYMBOLS, SYMBOLS
         assert set(LIVE_SYMBOLS).issubset(set(SYMBOLS))
 
     def test_live_symbols_non_empty(self):
+        """Post-rebalance universe is 16 tech-focused symbols."""
         from run_strategy import LIVE_SYMBOLS
-        assert len(LIVE_SYMBOLS) >= 25
+        assert len(LIVE_SYMBOLS) >= 10
+        assert len(LIVE_SYMBOLS) == 16
 
     def test_btc_usd_in_live_symbols(self):
         from run_strategy import LIVE_SYMBOLS

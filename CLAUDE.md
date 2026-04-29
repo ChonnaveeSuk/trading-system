@@ -3,12 +3,12 @@
 
 ## Current Status
 
-**Phase:** 5 — 90-day paper trading IN PROGRESS (day 18/90, started 2026-04-07)
+**Phase:** 5 — 90-day paper trading IN PROGRESS (day 22/90, started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-25 08:25 ICT (Phase 5 hardening + reconcile resilience — refs aaee48e + 4d289ec + a047fb3)
-**Tests:** 221/221 passing (46 Rust + 175 Python), Clippy clean
+**Last updated:** 2026-04-29 ICT (tech-focus rebalance — 16-symbol universe replaces precious-metals-heavy 30 after 2026-04-28 100% concentration incident)
+**Tests:** 287/287 passing (47 Rust + 240 Python), Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
-**Strategy:** Sharpe 1.61, MaxDD 8.86%, ~992 THB/day (backtest), 31 seeded / 29 live trading (BNB-USD, GBP-USD excluded — not on Alpaca)
+**Strategy:** Sharpe 3.50 (backtest, equity-curve based), MaxDD 4.31%, ~749 THB/day on 16 tech-focused symbols
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
 
 **Phase 5 hardening (2026-04-24 / 2026-04-25 session):**
@@ -445,18 +445,45 @@ cat /tmp/quantai_first_fill_result.json                # read structured result
 CDE(55.0), AEM(35.2), AGI(28.6), PAAS(28.3), HL(25.0), GOLD(22.4),
 GDX(21.3), SLV(18.9), BTC-USD(18.8), RING(18.1), GDXJ(17.2)
 
-**31 Production Symbols:**
+**16 Production Symbols (post tech-focus rebalance, 2026-04-29):**
 ```python
 SYMBOLS = [
-    "BTC-USD", "BNB-USD",
-    "GLD", "IAU", "SLV",
-    "GDX", "GDXJ", "RING", "PAAS", "SILJ", "WPM", "HL", "CDE",
-    "NEM", "AEM", "AGI", "GOLD", "KGC",
-    "URA", "URNM", "DBC", "SCCO", "MP",
-    "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
+    # Big Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META",
+    # Tech ETFs
+    "QQQ", "XLK", "SMH",
+    # Growth (high-beta single names)
+    "TSLA", "AMD", "AVGO",
+    # Broad market
+    "SPY", "IWM",
+    # Crypto
+    "BTC-USD",
+    # Defensive (gold + long-duration bonds)
+    "GLD", "TLT",
 ]
 ```
-Excluded (net-negative in backtest): ETH-USD, NVDA, MSFT, AMZN, TSLA, SOL-USD, XRP-USD, EUR-USD, MAG
+
+**Why we rebalanced** (2026-04-29 — replaces 30-symbol precious-metals-heavy universe):
+- 2026-04-28 incident: 10/10 positions in `precious_metals` sector → -$4,825
+  cumulative drawdown. The old universe had 16/30 (53%) of names in
+  precious_metals, so the sector cap (max 3 positions / 30% notional) protected
+  *new* entries but couldn't unwind the existing concentration.
+- New universe spreads across 6 sectors, with the densest (`big_tech`) holding
+  only 5 names (31% of universe). Realised concentration of any one sector is
+  now hard-bounded at 3 positions / 30% notional by the sector gate in
+  `alpaca_direct.py`.
+- Backtest comparison (2024-06-07 → 2026-04-28, 663 trading days):
+  | Metric            | Old 30-symbol PM     | New 16-symbol Tech   |
+  |-------------------|----------------------|----------------------|
+  | Sharpe (eq curve) | 1.61                 | 3.50                 |
+  | Max drawdown      | 8.86%                | 4.31%                |
+  | Avg daily P&L     | ~992 THB             | 749 THB              |
+  | Total trades      | 166                  | 248                  |
+  | Concentration     | 53% PM               | max 31% per sector   |
+- Top per-symbol contributors (Sharpe in walk-forward backtest):
+  GOOGL 2.84, SMH 1.94, SPY 1.25, IWM 1.22, NVDA 1.10
+- Sector limit (max 3 positions, max 30% notional) remains active and is the
+  primary protection against any future concentration incident.
 
 ### Original (2026-03-28) — Baseline
 

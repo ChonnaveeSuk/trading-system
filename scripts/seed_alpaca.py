@@ -37,16 +37,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("seed_alpaca")
 
-# All 31 production symbols (matches CLAUDE.md capital simulation) + data-only proxies.
-# VIXY: not traded — used as the VIX (volatility/fear) proxy by MomentumStrategy.update_vix().
+# Tech-focused 16-symbol universe + data-only proxies (SPY for regime, VIXY for VIX filter).
+# Replaces the 30-symbol precious-metals-heavy universe (rebalanced 2026-04-29 after
+# 2026-04-28 100% concentration incident → -$4,825 cumulative loss).
 DEFAULT_SYMBOLS = [
-    "BTC-USD", "BNB-USD",
-    "GLD", "IAU", "SLV",
-    "GDX", "GDXJ", "RING", "PAAS", "SILJ", "WPM", "HL", "CDE",
-    "NEM", "AEM", "AGI", "GOLD", "KGC",
-    "URA", "URNM", "DBC", "SCCO", "MP",
-    "SPY", "QQQ", "IWM", "XLK", "AAPL", "TLT", "EEM", "GBP-USD",
-    "VIXY",  # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
+    # Big Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META",
+    # Tech ETFs
+    "QQQ", "XLK", "SMH",
+    # Growth
+    "TSLA", "AMD", "AVGO",
+    # Broad market (also used as regime proxy)
+    "SPY", "IWM",
+    # Crypto
+    "BTC-USD",
+    # Defensive
+    "GLD", "TLT",
+    # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
+    "VIXY",
 ]
 DEFAULT_DAYS = 400
 

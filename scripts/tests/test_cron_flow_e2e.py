@@ -153,20 +153,20 @@ def test_happy_path_full_cron(db_conn, alpaca_mock, alpaca_session, monkeypatch)
     invariant intact, all 7 morning-report sections render, no false $49k,
     HIGH CONCENTRATION does NOT fire (mixed sectors).
     """
-    # 10 symbols across 5 different sectors (precious_metals, equity_broad,
-    # equity_tech, bonds, uranium, crypto).  Confirms HIGH CONCENTRATION
-    # only fires on real concentration, not just any non-empty book.
+    # 10 symbols across 6 different sectors (big_tech, tech_etf, growth,
+    # broad_market, defensive, crypto).  Confirms HIGH CONCENTRATION only
+    # fires on real concentration, not just any non-empty book.
     symbols_prices = [
-        ("GLD",     11,  434.35),  # precious_metals
-        ("AAPL",    25,  175.20),  # equity_single
-        ("SPY",     12,  515.40),  # equity_broad
-        ("QQQ",      8,  445.10),  # equity_broad
-        ("TLT",     30,   95.30),  # bonds
-        ("URA",     45,   28.90),  # uranium
-        ("GDX",     20,   31.40),  # precious_metals
-        ("XLK",     10,  205.55),  # equity_tech
-        ("IWM",     15,  205.30),  # equity_broad
-        ("AEM",     14,   68.10),  # precious_metals
+        ("AAPL",    25,  175.20),  # big_tech
+        ("MSFT",     8,  410.10),  # big_tech
+        ("SPY",     12,  515.40),  # broad_market
+        ("QQQ",      8,  445.10),  # tech_etf
+        ("XLK",     10,  205.55),  # tech_etf
+        ("IWM",     15,  205.30),  # broad_market
+        ("TLT",     30,   95.30),  # defensive
+        ("GLD",     11,  434.35),  # defensive
+        ("TSLA",    18,  240.00),  # growth
+        ("AVGO",     6,  150.00),  # growth
     ]
 
     seeded = _seed_submitted_orders(
@@ -354,35 +354,31 @@ def test_empty_positions_pnl_from_equity_delta(
     assert level == "SUMMARY"
 
 
-# ── 4. Sector concentration — all 10 in precious_metals → HIGH CONCENTRATION ──
+# ── 4. Sector concentration — all 5 in big_tech → HIGH CONCENTRATION ──────────
 
 def test_high_concentration_warning_fires(
     db_conn, alpaca_mock, alpaca_session, monkeypatch,
 ):
-    """All 10 positions in precious_metals → morning report fires HIGH
-    CONCENTRATION (>50% of book in a single sector)."""
-    pm_book = [
-        ("GLD",  11,  434.35),
-        ("IAU",  50,   65.20),
-        ("AEM",  14,   68.10),
-        ("KGC", 153,   32.35),
-        ("AGI",  80,   18.40),
-        ("WPM",  35,   55.20),
-        ("GOLD", 75,   18.10),
-        ("NEM",  60,   42.30),
-        ("CDE", 200,    5.90),
-        ("SLV",  50,   29.40),
+    """All 5 positions in big_tech → morning report fires HIGH
+    CONCENTRATION (>50% of book in a single sector). Mirrors the
+    2026-04-28 precious_metals incident on the post-rebalance universe."""
+    bigtech_book = [
+        ("AAPL",  50,  175.20),
+        ("MSFT",  20,  410.10),
+        ("NVDA",  10,  900.50),
+        ("GOOGL", 60,  165.30),
+        ("META",  15,  500.00),
     ]
-    seeded = _seed_submitted_orders(db_conn, [s for s, *_ in pm_book])
+    seeded = _seed_submitted_orders(db_conn, [s for s, *_ in bigtech_book])
     _seed_daily_pnl_history(db_conn, days_back=3)
 
-    for (client_id, broker_id, sym), (_, qty, price) in zip(seeded, pm_book):
+    for (client_id, broker_id, sym), (_, qty, price) in zip(seeded, bigtech_book):
         alpaca_mock.orders[broker_id] = _alpaca_filled_payload(
             broker_id, sym, qty, price,
         )
     alpaca_mock.positions = [
         _alpaca_position_payload(s, q, p, unrealized=8.0)
-        for s, q, p in pm_book
+        for s, q, p in bigtech_book
     ]
     alpaca_mock.account = {
         "equity": "100080.00", "last_equity": "100000.00",
@@ -395,12 +391,12 @@ def test_high_concentration_warning_fires(
 
     message, _ = morning_report.build_report()
     assert "Sector Exposure" in message
-    assert "precious_metals" in message
+    assert "big_tech" in message
     assert "HIGH CONCENTRATION" in message, (
         "HIGH CONCENTRATION must fire when 100% of book is one sector"
     )
-    assert "precious_metals 100%" in message or "precious_metals  100%" in message \
-        or "precious_metals 100" in message  # tolerate format spacing
+    assert "big_tech 100%" in message or "big_tech  100%" in message \
+        or "big_tech 100" in message  # tolerate format spacing
 
 
 # ── 5. Partial cron failure — morning_report DB issue, cron must not block ────

@@ -449,38 +449,37 @@ def _pos(symbol: str, qty: str = "10", market_value: str = "5000") -> dict:
 class TestSectorGate:
     """Sector concentration limit (added 2026-04-28 incident response).
 
-    precious_metals saturates fastest in the live universe, so it's the
-    canonical fixture. AAPL stands in for the unrelated-sector control.
+    big_tech is the densest sector in the post-rebalance universe (5 names),
+    so it's the canonical saturation fixture. SPY (broad_market) stands in
+    for the unrelated-sector control.
     """
 
-    # All precious_metals symbols Alpaca actually trades (BNB-USD, GBP-USD
-    # are excluded from _to_alpaca_symbol so they never hit this code path).
-    _PM_SYMBOLS = ("GLD", "IAU", "SLV", "GDX", "GDXJ", "RING", "PAAS",
-                   "WPM", "HL", "CDE", "NEM", "AEM", "AGI", "GOLD")
+    # All big_tech symbols (5-name sector — densest in tech-focus universe).
+    _BIGTECH_SYMBOLS = ("AAPL", "MSFT", "NVDA", "GOOGL", "META")
 
     def test_sector_at_count_limit_rejects_buy(self):
-        """3 precious_metals positions already → 4th BUY (KGC) rejected."""
+        """3 big_tech positions already → 4th BUY (META) rejected."""
         client = _make_client()
-        positions = [_pos(s, market_value="1000") for s in self._PM_SYMBOLS[:3]]
+        positions = [_pos(s, market_value="1000") for s in self._BIGTECH_SYMBOLS[:3]]
         client._session.get.side_effect = [
             _mock_account("100000"),
             _mock_positions(positions),
         ]
-        signal = _buy_signal(symbol="KGC", qty=Decimal("5"))
+        signal = _buy_signal(symbol="META", qty=Decimal("5"))
 
-        result = client.submit_signal(signal, current_price=8.0)
+        result = client.submit_signal(signal, current_price=500.0)
 
         assert result is not None
         assert result.accepted is False
         assert result.status == "REJECTED"
-        assert "precious_metals" in result.message
+        assert "big_tech" in result.message
         assert f"{_MAX_SECTOR_POSITIONS}" in result.message
         client._session.post.assert_not_called()
 
     def test_sector_under_count_limit_passes(self):
-        """2 precious_metals positions → 3rd BUY proceeds (count under cap)."""
+        """2 big_tech positions → 3rd BUY proceeds (count under cap)."""
         client = _make_client()
-        positions = [_pos(s, market_value="500") for s in self._PM_SYMBOLS[:2]]
+        positions = [_pos(s, market_value="500") for s in self._BIGTECH_SYMBOLS[:2]]
         # Open-orders call is wrapped in try/except, so an empty list reply suffices.
         client._session.get.side_effect = [
             _mock_account("100000"),
@@ -489,38 +488,38 @@ class TestSectorGate:
         ]
         client._session.post.return_value = _mock_order_response()
 
-        signal = _buy_signal(symbol="KGC", qty=Decimal("5"))
+        signal = _buy_signal(symbol="GOOGL", qty=Decimal("5"))
         with patch.object(client, "_record_order_pg"):
-            result = client.submit_signal(signal, current_price=8.0)
+            result = client.submit_signal(signal, current_price=160.0)
 
         assert result is not None
         assert result.accepted is True
 
     def test_sector_pct_breach_rejects_buy(self):
-        """1 huge precious_metals position pushes sector ≥30% → next BUY rejected."""
+        """1 huge big_tech position pushes sector ≥30% → next BUY rejected."""
         client = _make_client()
         # Single existing position with $30,000 market_value on $100k equity =
         # exactly 30% of book before any new BUY. Adding even a $1 position
         # tips us over the cap.
         client._session.get.side_effect = [
             _mock_account("100000"),
-            _mock_positions([_pos("GLD", market_value="30000")]),
+            _mock_positions([_pos("AAPL", market_value="30000")]),
         ]
-        signal = _buy_signal(symbol="KGC", qty=Decimal("100"))  # large enough to matter
+        signal = _buy_signal(symbol="MSFT", qty=Decimal("100"))  # large enough to matter
 
-        result = client.submit_signal(signal, current_price=10.0)
+        result = client.submit_signal(signal, current_price=400.0)
 
         assert result is not None
         assert result.accepted is False
         assert result.status == "REJECTED"
-        assert "precious_metals" in result.message
+        assert "big_tech" in result.message
         assert f"{int(float(_MAX_SECTOR_PCT) * 100)}%" in result.message
         client._session.post.assert_not_called()
 
     def test_other_sector_unaffected_by_saturated_sector(self):
-        """precious_metals at 3/3 must not block AAPL (tech sector)."""
+        """big_tech at 3/3 must not block SPY (broad_market sector)."""
         client = _make_client()
-        positions = [_pos(s, market_value="1000") for s in self._PM_SYMBOLS[:3]]
+        positions = [_pos(s, market_value="1000") for s in self._BIGTECH_SYMBOLS[:3]]
         client._session.get.side_effect = [
             _mock_account("100000"),
             _mock_positions(positions),
@@ -528,9 +527,9 @@ class TestSectorGate:
         ]
         client._session.post.return_value = _mock_order_response()
 
-        signal = _buy_signal(symbol="AAPL", qty=Decimal("5"))
+        signal = _buy_signal(symbol="SPY", qty=Decimal("5"))
         with patch.object(client, "_record_order_pg"):
-            result = client.submit_signal(signal, current_price=180.0)
+            result = client.submit_signal(signal, current_price=550.0)
 
         assert result is not None
         assert result.accepted is True
