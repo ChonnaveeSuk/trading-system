@@ -39,6 +39,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -70,8 +71,25 @@ _MIN_SIGNAL_SCORE = 0.55
 _MAX_SECTOR_POSITIONS = 3              # max concurrent positions per sector
 _MAX_SECTOR_PCT = Decimal("0.30")      # max sector exposure as fraction of equity
 
+# Hard stop-loss defaults (overridable from MomentumConfig at the call site).
+# See MomentumConfig.stop_loss_pct in strategy/src/signals/momentum.py.
+_DEFAULT_STOP_LOSS_PCT = 0.05          # close when unrealized_pl ≤ -5%
+_DEFAULT_STOP_WARN_PCT = 0.03          # log WARN when unrealized_pl ≤ -3%
+
 # Alpaca API rate limit: 200 req/min on paper. A brief sleep keeps us safe.
 _API_SLEEP_S = 0.3
+
+
+@dataclass
+class StopLossResult:
+    """Outcome of one symbol's stop-loss evaluation."""
+    symbol: str
+    alpaca_symbol: str
+    unrealized_plpc: float    # decimal fraction (e.g. -0.0623 for -6.23%)
+    triggered: bool           # True if a SELL was submitted
+    warned: bool              # True if loss crossed warn threshold but not stop
+    order_id: Optional[str] = None
+    error: Optional[str] = None
 
 
 # ── Symbol translation ─────────────────────────────────────────────────────────
@@ -381,6 +399,138 @@ class AlpacaDirectClient:
             open_orders=len(positions),
             pubsub_active=False,  # Pub/Sub handled separately
         )
+
+    # ── Hard stop loss ────────────────────────────────────────────────────────
+
+    def check_and_trigger_stops(
+        self,
+        stop_loss_pct: float = _DEFAULT_STOP_LOSS_PCT,
+        warn_pct: float = _DEFAULT_STOP_WARN_PCT,
+        telegram_alert=None,
+    ) -> list[StopLossResult]:
+        """Liquidate any open position whose unrealized loss breaches stop_loss_pct.
+
+        Runs BEFORE the strategy's per-symbol signal loop so freed equity is
+        available the same day. Each stopped position is closed via Alpaca's
+        DELETE /positions/{symbol} (full liquidation, market order).
+
+        Args:
+            stop_loss_pct:   trigger threshold as a positive fraction
+                             (0.05 → close when unrealized_plpc ≤ -0.05).
+            warn_pct:        WARN threshold (logs only; no order). Use a value
+                             smaller than stop_loss_pct.
+            telegram_alert:  optional callable(message, level=str) -> bool used
+                             to fire 🛑 alerts on triggers. Defaults to no-op.
+
+        Returns:
+            List of StopLossResult, one per open position with a non-trivial
+            unrealized P/L. Skips positions where unrealized_plpc is missing
+            or non-negative.
+
+        Always non-fatal: a bad position payload is logged and skipped.
+        """
+        results: list[StopLossResult] = []
+        try:
+            positions = self._get_positions()
+        except Exception as e:
+            logger.warning("check_and_trigger_stops: positions fetch failed: %s", e)
+            return results
+
+        if not positions:
+            logger.info("check_and_trigger_stops: no open positions")
+            return results
+
+        # Negative thresholds for direct comparison with unrealized_plpc.
+        stop_threshold = -abs(stop_loss_pct)
+        warn_threshold = -abs(warn_pct)
+
+        for alpaca_symbol, pos in positions.items():
+            yf_symbol = _from_alpaca_symbol(alpaca_symbol)
+            try:
+                plpc_str = pos.get("unrealized_plpc")
+                if plpc_str is None:
+                    logger.debug(
+                        "%s: no unrealized_plpc in position payload — skipping",
+                        yf_symbol,
+                    )
+                    continue
+                plpc = float(plpc_str)
+            except (ValueError, TypeError) as e:
+                logger.warning("%s: cannot parse unrealized_plpc=%r: %s",
+                               yf_symbol, pos.get("unrealized_plpc"), e)
+                continue
+
+            if plpc > warn_threshold:
+                continue  # not even at the warn line
+
+            if plpc <= stop_threshold:
+                logger.warning(
+                    "STOP LOSS triggered: %s %.2f%% → SELL",
+                    yf_symbol, plpc * 100,
+                )
+                try:
+                    order = self._close_position(alpaca_symbol)
+                    order_id = order.get("id", "")
+                    results.append(StopLossResult(
+                        symbol=yf_symbol,
+                        alpaca_symbol=alpaca_symbol,
+                        unrealized_plpc=plpc,
+                        triggered=True,
+                        warned=False,
+                        order_id=order_id,
+                    ))
+                    if telegram_alert is not None:
+                        try:
+                            telegram_alert(
+                                f"🛑 Stop Loss Triggered\n"
+                                f"Symbol: {yf_symbol} | Loss: {plpc*100:.2f}%\n"
+                                f"Threshold: -{stop_loss_pct*100:.1f}% | "
+                                f"Action: market SELL submitted",
+                                level="CRITICAL",
+                            )
+                        except Exception as alert_err:
+                            logger.debug(
+                                "Telegram alert failed (non-fatal): %s", alert_err,
+                            )
+                    time.sleep(_API_SLEEP_S)
+                except requests.HTTPError as e:
+                    body = e.response.text if e.response is not None else str(e)
+                    logger.error(
+                        "%s: stop-loss SELL failed: %s",
+                        yf_symbol, body,
+                    )
+                    results.append(StopLossResult(
+                        symbol=yf_symbol,
+                        alpaca_symbol=alpaca_symbol,
+                        unrealized_plpc=plpc,
+                        triggered=False,
+                        warned=False,
+                        error=body[:200],
+                    ))
+                except Exception as e:
+                    logger.error("%s: stop-loss SELL failed: %s", yf_symbol, e)
+                    results.append(StopLossResult(
+                        symbol=yf_symbol,
+                        alpaca_symbol=alpaca_symbol,
+                        unrealized_plpc=plpc,
+                        triggered=False,
+                        warned=False,
+                        error=str(e)[:200],
+                    ))
+            else:
+                logger.warning(
+                    "STOP LOSS WARN: %s at %.2f%% — approaching -%.1f%% stop",
+                    yf_symbol, plpc * 100, stop_loss_pct * 100,
+                )
+                results.append(StopLossResult(
+                    symbol=yf_symbol,
+                    alpaca_symbol=alpaca_symbol,
+                    unrealized_plpc=plpc,
+                    triggered=False,
+                    warned=True,
+                ))
+
+        return results
 
     def submit_signal(
         self,

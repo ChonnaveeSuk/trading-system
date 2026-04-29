@@ -271,6 +271,34 @@ def run_live(symbols: list[str]) -> None:
     # Signal counters for daily summary and Telegram alerts
     counts: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0, "orders_submitted": 0}
 
+    # ── Hard stop loss (BEFORE strategy signal loop) ──────────────────────────
+    # Frees equity for the same day's signals if a position has breached
+    # MomentumConfig.stop_loss_pct. AlpacaDirect path only — TradingBridgeClient
+    # has no Alpaca position view.
+    if _ALPACA_DIRECT and strategy.config.stop_loss_enabled:
+        try:
+            stops = client.check_and_trigger_stops(
+                stop_loss_pct=strategy.config.stop_loss_pct,
+                warn_pct=strategy.config.stop_loss_warn_pct,
+                telegram_alert=_telegram_alert,
+            )
+            triggered = [s for s in stops if s.triggered]
+            warned = [s for s in stops if s.warned]
+            if triggered:
+                print(f"\n  STOP LOSS: {len(triggered)} position(s) closed:")
+                for s in triggered:
+                    print(f"    🛑 {s.symbol:<8} {s.unrealized_plpc*100:+6.2f}%  "
+                          f"order={s.order_id}")
+            if warned:
+                print(f"  STOP LOSS WARN: {len(warned)} position(s) at risk:")
+                for s in warned:
+                    print(f"    ⚠  {s.symbol:<8} {s.unrealized_plpc*100:+6.2f}%  "
+                          f"(stop at -{strategy.config.stop_loss_pct*100:.1f}%)")
+            counts["stops_triggered"] = len(triggered)
+            counts["stops_warned"] = len(warned)
+        except Exception as e:
+            logger.warning("Stop-loss check failed (non-fatal): %s", e)
+
     print()
     with PostgresOhlcvFetcher() as fetcher:
         # ── Market regime detection (must happen before signal generation) ────

@@ -251,6 +251,21 @@ class MomentumConfig:
     calendar_filter: bool = True
     calendar_blackout_days: int = 1   # days before the event that are also blacked out
 
+    # Hard stop loss — close positions that breach a fixed unrealized loss
+    # threshold, regardless of the strategy's MA/RSI exit signals.
+    #
+    # Why: MA-crossover SELL is a lagging exit. During the 2026-04-28
+    # precious-metals slide a 10-position cluster bled past -$2,600 unrealized
+    # while waiting on the slow MA to cross. A hard stop bounds the per-trade
+    # loss and recovers capital deterministically.
+    #
+    # Wiring: scripts/run_daily.sh → run_strategy.run_live() invokes
+    # AlpacaDirectClient.check_and_trigger_stops(stop_loss_pct=…) BEFORE the
+    # symbol loop, so freed equity is available for that day's signals.
+    stop_loss_enabled: bool = True
+    stop_loss_pct: float = 0.05       # close at unrealized_pl ≤ -5%
+    stop_loss_warn_pct: float = 0.03  # log/report WARN at unrealized_pl ≤ -3%
+
 
 @dataclass
 class MomentumFeatures:

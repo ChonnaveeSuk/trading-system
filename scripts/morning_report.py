@@ -323,6 +323,60 @@ def _query_ab_attribution(yesterday: date) -> dict:
     return result
 
 
+def _query_stop_loss_risk(stop_pct: float, warn_pct: float) -> list[dict]:
+    """Return positions with unrealized_pnl_pct ≤ -warn_pct, sorted worst-first.
+
+    Each entry: {symbol, qty, avg_cost, unrealized_pnl, unrealized_pct, breached}
+    where:
+      - unrealized_pct = unrealized_pnl / (|qty| * avg_cost)
+      - breached = True if unrealized_pct ≤ -stop_pct (i.e. should already
+        have been stopped on the next live run).
+
+    Source is the local positions table — same view used by sector
+    concentration. Always non-fatal: returns [] on DB error.
+    """
+    rows: list[dict] = []
+    try:
+        conn = _connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT symbol, quantity, average_cost, "
+                    "COALESCE(unrealized_pnl, 0) "
+                    "FROM positions WHERE quantity != 0"
+                )
+                raw = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("Stop-loss risk query failed: %s", e)
+        return rows
+
+    for sym, qty, avg_cost, unreal in raw:
+        try:
+            qty_f = float(qty or 0)
+            avg_f = float(avg_cost or 0)
+            unreal_f = float(unreal or 0)
+        except (TypeError, ValueError):
+            continue
+        cost_basis = abs(qty_f) * avg_f
+        if cost_basis <= 0:
+            continue
+        pct = unreal_f / cost_basis
+        if pct > -abs(warn_pct):
+            continue
+        rows.append({
+            "symbol": sym,
+            "qty": qty_f,
+            "avg_cost": avg_f,
+            "unrealized_pnl": unreal_f,
+            "unrealized_pct": pct,
+            "breached": pct <= -abs(stop_pct),
+        })
+    rows.sort(key=lambda r: r["unrealized_pct"])
+    return rows
+
+
 def _query_sector_concentration() -> dict:
     """Return sector-level exposure from current open positions.
 
@@ -438,9 +492,15 @@ def build_report() -> tuple[str, str]:
     # \u2500\u2500 VIX (volatility) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     vix_state = vix_data.get("vix_state", "")
     vix_level = vix_data.get("vix_level", 0.0)
-    if vix_state:
+    vix_price = vix_data.get("vix_price", 0.0)
+    if vix_state and vix_level > 0:
         v_emoji = _VIX_EMOJI.get(vix_state, "\u26aa")
         vix_section = f"{v_emoji} VIX: {vix_level:.1f} ({vix_state})"
+    elif vix_state:
+        # State recorded but level==0 \u2192 VIXY OHLCV missing/stale on Cloud Run
+        # (e.g. seed_alpaca skipped VIXY because the IEX feed didn't return bars).
+        # Show "N/A" rather than "0.0" so the dashboard isn't misleading.
+        vix_section = "\u26a0\ufe0f VIX: N/A (data unavailable)"
     else:
         vix_section = None
 
@@ -487,6 +547,31 @@ def build_report() -> tuple[str, str]:
         )
     else:
         ab_section = None
+    # ── Stop-loss risk (positions at or near hard stop) ───────────────────────
+    # Mirrors the hard-stop trigger in alpaca_direct.check_and_trigger_stops.
+    from src.signals.momentum import MomentumConfig
+    _slcfg = MomentumConfig()
+    stop_pct = _slcfg.stop_loss_pct
+    warn_pct = _slcfg.stop_loss_warn_pct
+    stop_rows = _query_stop_loss_risk(stop_pct, warn_pct)
+    if stop_rows:
+        lines = ["\U0001f6d1 Stop Loss Watch"]
+        for r in stop_rows:
+            pct = r["unrealized_pct"] * 100
+            if r["breached"]:
+                icon = "\U0001f6d1"  # 🛑 — should be stopped on next live run
+                tag = f"BREACHED stop -{stop_pct*100:.1f}%"
+            else:
+                icon = "⚠"  # ⚠ — approaching stop
+                tag = f"approaching stop -{stop_pct*100:.1f}%"
+            lines.append(
+                f"  {icon} {r['symbol']:<6} {pct:+6.2f}%  "
+                f"{_fmt_pnl(r['unrealized_pnl'])} — {tag}"
+            )
+        stop_section = "\n".join(lines)
+    else:
+        stop_section = None
+
     # ── Sector Concentration (skip if no positions) ───────────────────────────
     # Mirrors the live-trading sector gate in alpaca_direct.py.
     from src.bridge.alpaca_direct import _MAX_SECTOR_POSITIONS, _MAX_SECTOR_PCT
@@ -592,6 +677,8 @@ def build_report() -> tuple[str, str]:
     sections.append(signals_section)
     if ab_section:
         sections.append(ab_section)
+    if stop_section:
+        sections.append(stop_section)
     if sector_section:
         sections.append(sector_section)
     sections.extend([pnl_section, gate_section, next_section])

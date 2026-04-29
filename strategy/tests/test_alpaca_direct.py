@@ -554,6 +554,136 @@ class TestSectorGate:
         assert result.accepted is True
 
 
+# ── Hard stop loss ────────────────────────────────────────────────────────────
+
+def _pos_with_pl(symbol: str, plpc: str, qty: str = "10") -> dict:
+    """Position payload with explicit unrealized_plpc (decimal fraction)."""
+    return {
+        "symbol": symbol,
+        "qty": qty,
+        "market_value": "1000",
+        "avg_entry_price": "100",
+        "unrealized_plpc": plpc,
+    }
+
+
+class TestStopLoss:
+    """check_and_trigger_stops liquidates positions past -stop_loss_pct."""
+
+    def test_no_positions_returns_empty(self):
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([])
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert results == []
+        client._session.delete.assert_not_called()
+
+    def test_position_above_warn_skipped(self):
+        """Position at -1% (above -3% warn) should not appear in results."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("AAPL", "-0.01"),
+        ])
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05, warn_pct=0.03)
+        assert results == []
+        client._session.delete.assert_not_called()
+
+    def test_position_at_warn_logs_only(self):
+        """Position at -3.5% should be warned but not closed."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("AAPL", "-0.035"),
+        ])
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05, warn_pct=0.03)
+        assert len(results) == 1
+        r = results[0]
+        assert r.symbol == "AAPL"
+        assert r.warned is True
+        assert r.triggered is False
+        client._session.delete.assert_not_called()
+
+    def test_position_at_stop_triggers_close(self):
+        """Position at -6.23% should fire DELETE /positions/AAPL."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("AAPL", "-0.0623"),
+        ])
+        client._session.delete.return_value = _mock_order_response(
+            order_id="stop-order-123", status="pending_new",
+        )
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05, warn_pct=0.03)
+        assert len(results) == 1
+        r = results[0]
+        assert r.triggered is True
+        assert r.warned is False
+        assert r.order_id == "stop-order-123"
+        delete_url = client._session.delete.call_args[0][0]
+        assert "/positions/AAPL" in delete_url
+
+    def test_telegram_alert_fired_on_trigger(self):
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("WPM", "-0.07"),
+        ])
+        client._session.delete.return_value = _mock_order_response()
+        alerts: list[tuple[str, str]] = []
+
+        def _alert(msg: str, level: str = "INFO") -> bool:
+            alerts.append((msg, level))
+            return True
+
+        client.check_and_trigger_stops(
+            stop_loss_pct=0.05, warn_pct=0.03, telegram_alert=_alert,
+        )
+        assert len(alerts) == 1
+        msg, level = alerts[0]
+        assert "Stop Loss Triggered" in msg
+        assert "WPM" in msg
+        assert level == "CRITICAL"
+
+    def test_btc_symbol_reverse_translated(self):
+        """Alpaca returns BTCUSD; result.symbol should be BTC-USD."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("BTCUSD", "-0.06", qty="0.1"),
+        ])
+        client._session.delete.return_value = _mock_order_response()
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert len(results) == 1
+        assert results[0].symbol == "BTC-USD"
+        assert results[0].alpaca_symbol == "BTCUSD"
+
+    def test_close_position_failure_recorded(self):
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("AAPL", "-0.10"),
+        ])
+        http_err = requests.HTTPError(
+            response=MagicMock(status_code=422, text="market closed"),
+        )
+        client._session.delete.side_effect = http_err
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert len(results) == 1
+        r = results[0]
+        assert r.triggered is False
+        assert r.error is not None
+        assert "market closed" in r.error
+
+    def test_missing_unrealized_plpc_skipped(self):
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            {"symbol": "AAPL", "qty": "10"},  # no unrealized_plpc
+        ])
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert results == []
+
+    def test_positions_fetch_failure_returns_empty(self):
+        client = _make_client()
+        client._session.get.side_effect = requests.ConnectionError("offline")
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert results == []
+        client._session.delete.assert_not_called()
+
+
 # ── Context manager ───────────────────────────────────────────────────────────
 
 class TestContextManager:
