@@ -42,13 +42,15 @@ _ALPACA_UNSUPPORTED = frozenset({"BNB-USD", "GBP-USD", "EUR-USD"})
 
 # yfinance → Alpaca symbol mapping
 # Stocks / ETFs pass through unchanged.
-# Crypto: yfinance uses BTC-USD, Alpaca data API uses BTCUSD.
+# Crypto: yfinance uses BTC-USD; Alpaca data API v1beta3 uses BTC/USD
+# (with slash). Note: Alpaca's *trading* API uses BTCUSD without slash —
+# that mapping lives in alpaca_direct.py and is intentionally different.
 _YF_TO_ALPACA_STOCK = {}   # no mapping needed for stocks
 _YF_TO_ALPACA_CRYPTO = {
-    "BTC-USD":  "BTCUSD",
-    "ETH-USD":  "ETHUSD",
-    "SOL-USD":  "SOLUSD",
-    "XRP-USD":  "XRPUSD",
+    "BTC-USD":  "BTC/USD",
+    "ETH-USD":  "ETH/USD",
+    "SOL-USD":  "SOL/USD",
+    "XRP-USD":  "XRP/USD",
 }
 
 
