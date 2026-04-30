@@ -50,6 +50,12 @@ resource "google_artifact_registry_repository" "quantai" {
   format        = "DOCKER"
 
   depends_on = [google_project_service.cloud_run_apis]
+
+  # cleanup_policies is configured out-of-band (console) to retain only a few
+  # latest tags + delete untagged after 1 day. Don't fight that on every apply.
+  lifecycle {
+    ignore_changes = [cleanup_policies]
+  }
 }
 
 # Allow the quantai SA to push/pull images

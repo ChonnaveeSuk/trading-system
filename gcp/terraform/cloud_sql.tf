@@ -99,6 +99,17 @@ resource "google_sql_database_instance" "postgres" {
     google_project_service.sqladmin,
     google_project_service.servicenetworking,
   ]
+
+  # The Cloud Run daily-runner toggles activation_policy between ALWAYS and
+  # NEVER to save ~$7.55/month — that would otherwise show as drift on every
+  # plan and a redundant settings update on every apply. Same for ssl_mode:
+  # GCP added ENCRYPTED_ONLY as the implicit default, which we don't fight.
+  lifecycle {
+    ignore_changes = [
+      settings[0].activation_policy,
+      settings[0].ip_configuration[0].ssl_mode,
+    ]
+  }
 }
 
 # ── Database ──────────────────────────────────────────────────────────────────

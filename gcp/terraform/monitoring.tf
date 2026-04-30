@@ -53,22 +53,22 @@ resource "google_monitoring_notification_channel" "email" {
   depends_on = [google_project_service.apis]
 }
 
-# Webhook → Telegram bot.  The webhook URL embeds chat_id so a plain text
-# alert body delivers to the right chat.  parse_mode and disable_web_page_preview
-# are passed via query string to keep the body readable on mobile.
+# Webhook → Telegram bot.  The Telegram bot token is part of the URL path
+# (the standard Bot API contract), so we send it via the `url` label and
+# omit auth_token — webhook_tokenauth's only supported label is `url`,
+# and adding sensitive_labels.auth_token returns a 400 from the GCP API.
+# The bot token + chat ID are read from Secret Manager at apply time so
+# nothing sensitive leaks into tfvars or plan output.
 resource "google_monitoring_notification_channel" "telegram_webhook" {
   display_name = "QuantAI Telegram Bot"
   type         = "webhook_tokenauth"
   description  = "Webhook → Telegram bot @QuantAITradingBot"
   labels = {
     url = format(
-      "https://api.telegram.org/bot%s/sendMessage?chat_id=%s&parse_mode=Markdown&disable_web_page_preview=true",
+      "https://api.telegram.org/bot%s/sendMessage?chat_id=%s",
       data.google_secret_manager_secret_version.telegram_bot_token.secret_data,
       data.google_secret_manager_secret_version.telegram_chat_id.secret_data,
     )
-  }
-  sensitive_labels {
-    auth_token = data.google_secret_manager_secret_version.telegram_bot_token.secret_data
   }
   depends_on = [google_project_service.apis]
 }
