@@ -126,6 +126,52 @@ def _build_calendar_section(today: date) -> Optional[str]:
     return "\n".join(lines) if lines else None
 
 
+def _build_earnings_section(today: date, lookahead_days: int = 7) -> Optional[str]:
+    """Compose the per-symbol earnings block.
+
+    Shows:
+      ⛔ symbols with earnings TODAY or TOMORROW (BUY blocked)
+      📅 other earnings within the lookahead window for situational awareness
+
+    Returns None if the calendar is unavailable or there are no upcoming
+    earnings in the window.  Only the 9 stocks in the production universe
+    are tracked — ETFs/crypto never appear here.
+    """
+    try:
+        from src.filters.economic_calendar import EarningsCalendar
+    except Exception as e:
+        logger.debug("EarningsCalendar import failed (non-fatal): %s", e)
+        return None
+
+    ec = EarningsCalendar()
+    end = today + timedelta(days=lookahead_days)
+    upcoming = ec.events_in_window(today, end)
+    if not upcoming:
+        return None
+
+    blocked: list[str] = []
+    weekly: list[str] = []
+    for ev in upcoming:
+        days_away = (ev.event_date - today).days
+        when = (
+            "today"     if days_away == 0 else
+            "tomorrow"  if days_away == 1 else
+            ev.event_date.strftime("%b %-d")
+        )
+        if days_away <= ec.blackout_days_before:
+            blocked.append(f"  ⛔ {ev.symbol}: earnings {when} — BUY blocked")
+        else:
+            weekly.append(f"  • {ev.symbol} ({when}) — {ev.description}")
+
+    lines = ["📅 Earnings Watch"]
+    if blocked:
+        lines.extend(blocked)
+    if weekly:
+        lines.append("  This week:")
+        lines.extend(weekly)
+    return "\n".join(lines)
+
+
 def _query_vix() -> dict:
     """Return latest VIX state row from system_metrics, or {} if unavailable."""
     try:
@@ -506,6 +552,7 @@ def build_report() -> tuple[str, str]:
 
     # \u2500\u2500 Economic calendar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     cal_section = _build_calendar_section(today)
+    earnings_section = _build_earnings_section(today)
 
     # ── Signals ───────────────────────────────────────────────────────────────
     buy_count = int(signals_data.get("buy", 0))
@@ -674,6 +721,8 @@ def build_report() -> tuple[str, str]:
         sections.append(vix_section)
     if cal_section:
         sections.append(cal_section)
+    if earnings_section:
+        sections.append(earnings_section)
     sections.append(signals_section)
     if ab_section:
         sections.append(ab_section)

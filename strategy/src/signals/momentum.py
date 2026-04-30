@@ -248,6 +248,20 @@ class MomentumConfig:
     calendar_filter: bool = True
     calendar_blackout_days: int = 1   # days before the event that are also blacked out
 
+    # Earnings-calendar blackout filter (per-symbol). Tech single names move
+    # 5-10% on earnings day; entering 1 day before is a coin-flip on a
+    # fundamental release we are not modelling. The calendar lives in
+    # strategy/src/filters/economic_calendar.py::EarningsCalendar and covers
+    # the 9 stocks in the production universe (ETFs/crypto excluded by design).
+    #
+    # Behaviour:
+    #   earnings day for SYMBOL    → SYMBOL BUY blacked out
+    #   N days before for SYMBOL   → SYMBOL BUY blacked out
+    #   other symbols same date    → unaffected
+    #   SELL                       → always passes (need to be able to exit)
+    earnings_filter: bool = True
+    earnings_blackout_days: int = 1
+
     # Hard stop loss — close positions that breach a fixed unrealized loss
     # threshold, regardless of the strategy's MA/RSI exit signals.
     #
@@ -310,6 +324,13 @@ class MomentumStrategy:
             from ..filters.economic_calendar import EconomicCalendar
             self._calendar = EconomicCalendar(
                 blackout_days_before=self.config.calendar_blackout_days
+            )
+        # Earnings-calendar blackout filter (per-symbol, lazy-init)
+        self._earnings = None
+        if self.config.earnings_filter:
+            from ..filters.economic_calendar import EarningsCalendar
+            self._earnings = EarningsCalendar(
+                blackout_days_before=self.config.earnings_blackout_days
             )
 
     # ── Market regime ─────────────────────────────────────────────────────────
@@ -853,6 +874,32 @@ class MomentumStrategy:
             except Exception as e:
                 logger.debug("Calendar filter check failed (non-fatal): %s", e)
 
+        # ── Earnings blackout filter (per-symbol) ────────────────────────────
+        # Only applies when SYMBOL itself has an earnings event on/near today.
+        # ETFs and crypto are not in the calendar so this is a no-op for them.
+        # SELL signals always pass through.
+        earnings_blocked_event: Optional[str] = None
+        if (
+            self.config.earnings_filter
+            and self._earnings is not None
+            and direction == Direction.BUY
+        ):
+            try:
+                latest_ts = df.index[-1]
+                today = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
+                if self._earnings.is_blackout_day(symbol, today):
+                    earnings_blocked_event = (
+                        self._earnings.blackout_reason(symbol, today) or "earnings"
+                    )
+                    logger.warning(
+                        "BLACKOUT: %s %s — BUY suppressed",
+                        symbol, earnings_blocked_event,
+                    )
+                    direction = Direction.HOLD
+                    score = 0.0
+            except Exception as e:
+                logger.debug("Earnings filter check failed (non-fatal): %s", e)
+
         # ── ATR computation ───────────────────────────────────────────────────
         # ATR(atr_period) used for adaptive position sizing and stop placement.
         # Falls back to fixed position_pct sizing when atr_period=0 or ATR is NaN.
@@ -958,6 +1005,7 @@ class MomentumStrategy:
             "vix_level": round(self._vix_level, 4) if self._vix_level is not None else None,
             "vix_price": round(self._vix_price, 4) if self._vix_price is not None else None,
             "calendar_blackout": calendar_blocked_event,
+            "earnings_blackout": earnings_blocked_event,
             "trend_ride": trend_ride_buy,
             "trend_ride_exit_gated": trend_ride_exit_gated,
         }
@@ -1298,6 +1346,31 @@ class MomentumStrategy:
 
             buy_mask = signals["direction"] == Direction.BUY.value
             blocked = buy_mask & blackout_mask
+            signals.loc[blocked, "direction"] = Direction.HOLD.value
+            signals.loc[blocked, "score"] = 0.0
+
+        # ── Earnings blackout (vectorised per-bar, per-symbol) ────────────────
+        # Only the bars whose date falls within `symbol`'s earnings window are
+        # blacked out.  ETFs/crypto are not in the calendar so the mask stays
+        # all-False and the column is filled with None.
+        signals["earnings_blackout"] = None
+        if (
+            self.config.earnings_filter
+            and self._earnings is not None
+            and self._earnings.has_coverage(symbol)
+        ):
+            e_mask = pd.Series(False, index=signals.index)
+            e_reasons: list[Optional[str]] = []
+            for ts in signals.index:
+                d = ts.date() if hasattr(ts, "date") else ts
+                reason = self._earnings.blackout_reason(symbol, d)
+                if reason is not None:
+                    e_mask.loc[ts] = True
+                e_reasons.append(reason)
+            signals["earnings_blackout"] = e_reasons
+
+            buy_mask = signals["direction"] == Direction.BUY.value
+            blocked = buy_mask & e_mask
             signals.loc[blocked, "direction"] = Direction.HOLD.value
             signals.loc[blocked, "score"] = 0.0
 
