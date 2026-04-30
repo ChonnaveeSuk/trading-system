@@ -30,6 +30,44 @@ export GCP_PROJECT_ID="${GCP_PROJECT_ID:-quantai-trading-paper}"
 
 log() { echo "[${TIMESTAMP}] $*"; }
 
+# ── Error Reporting hook ──────────────────────────────────────────────────────
+# Best-effort: any step that wraps with `_run_step "label" cmd…` will trigger
+# error_report.py on non-zero exit, capturing the step name + tail of stderr.
+# The reporter itself never propagates failure (always exits 0) so we never
+# compound a real outage with a tooling failure.
+_ERR_LOG_DIR="${TMPDIR:-/tmp}/quantai-step-logs"
+mkdir -p "${_ERR_LOG_DIR}" 2>/dev/null || true
+
+_report_failure() {
+    local step="$1"
+    local exit_code="$2"
+    local logfile="$3"
+    python3 "${SCRIPT_DIR}/error_report.py" \
+        --step "${step}" \
+        --message "exit_code=${exit_code}" \
+        --traceback-file "${logfile}" \
+        --project "${GCP_PROJECT_ID:-quantai-trading-paper}" \
+        2>&1 | sed 's/^/[error_report] /' || true
+}
+
+# _run_step <label> <cmd...>: run a step capturing stderr to a tail buffer so
+# we can attach it to the Error Reporting payload when the step fails.
+_run_step() {
+    local label="$1"; shift
+    local logfile
+    logfile=$(mktemp "${_ERR_LOG_DIR}/$(echo "${label}" | tr -c 'A-Za-z0-9' '_').XXXXXX")
+    if "$@" 2> >(tee "${logfile}" >&2); then
+        rm -f "${logfile}"
+        return 0
+    else
+        local rc=$?
+        log "${label}: FAILED (exit=${rc}) — reporting to Cloud Error Reporting"
+        _report_failure "${label}" "${rc}" "${logfile}"
+        rm -f "${logfile}"
+        return ${rc}
+    fi
+}
+
 # ── Cloud SQL lifecycle helpers ────────────────────────────────────────────────
 # MANAGE_CLOUD_SQL=1: start instance before job, stop after via EXIT trap.
 # Saves ~$7.55/month (Cloud Run Job runs ~10 min/day; SQL is paid per minute).
@@ -137,7 +175,7 @@ cd "${STRATEGY_DIR}"
 
 if [[ "${ALPACA_DIRECT:-0}" == "1" ]]; then
     # Cloud Run path: direct Alpaca REST (no Rust gRPC needed)
-    python3 run_strategy.py --mode all
+    _run_step "Step 2/4: run_strategy --mode all" python3 run_strategy.py --mode all
     log "Step 2/4: Strategy run complete (live + backtest via Alpaca direct)."
 else
     # Local path: try gRPC → Rust OMS, fall back to backtest-only
@@ -154,7 +192,7 @@ cd "${ROOT}"
 
 # ── Step 3: Update daily P&L ──────────────────────────────────────────────────
 log "Step 3/4: Updating daily_pnl table…"
-python3 "${SCRIPT_DIR}/update_daily_pnl.py"
+_run_step "Step 3/4: update_daily_pnl" python3 "${SCRIPT_DIR}/update_daily_pnl.py"
 log "Step 3/4: daily_pnl updated."
 
 # ── Step 3.5: Send morning report via Telegram ────────────────────────────────
@@ -166,7 +204,7 @@ python3 "${SCRIPT_DIR}/morning_report.py" || \
 
 # ── Step 4: PostgreSQL backup ─────────────────────────────────────────────────
 log "Step 4/4: Running PostgreSQL backup to GCS…"
-bash "${SCRIPT_DIR}/backup_postgres.sh"
+_run_step "Step 4/4: backup_postgres" bash "${SCRIPT_DIR}/backup_postgres.sh"
 log "Step 4/4: Backup complete."
 
 # ── Step 5: System health snapshot (post-run) + cron marker ──────────────────

@@ -7,6 +7,7 @@ google-cloud-bigquery==3.25.0
 google-cloud-pubsub==2.25.0
 google-cloud-secret-manager==2.21.0
 google-cloud-storage==2.18.2
+google-cloud-error-reporting==1.11.1
 google-auth==2.35.0
 
 # Data & ML
