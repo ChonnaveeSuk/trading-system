@@ -88,6 +88,31 @@ GRPC_HOST = os.environ.get("GRPC_HOST", "localhost")
 GRPC_PORT = int(os.environ.get("GRPC_PORT", "50051"))
 
 
+def _fetch_recent_close_series(fetcher: PostgresOhlcvFetcher, symbol: str, limit: int):
+    """Return the latest `limit` bars for `symbol` as a close-only DataFrame.
+
+    Uses the fetcher's existing connection but bypasses its calendar-day
+    windowing so MA200 inputs are stable when the seed is older than the
+    default 30-day lookback (Cloud SQL post partial reseed).
+    """
+    import pandas as pd
+    conn = fetcher._ensure_connected()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT timestamp, close FROM ohlcv "
+            "WHERE symbol = %s ORDER BY timestamp DESC LIMIT %s",
+            (symbol, limit),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["close"])
+    df = pd.DataFrame(rows, columns=["timestamp", "close"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["close"] = df["close"].astype(float)
+    df = df.set_index("timestamp").sort_index()
+    return df
+
+
 def run_backtest(symbols: list[str]) -> None:
     """Backtest the momentum strategy on all symbols.
 
@@ -309,9 +334,13 @@ def run_live(symbols: list[str]) -> None:
     with PostgresOhlcvFetcher() as fetcher:
         # ── Market regime detection (must happen before signal generation) ────
         if strategy.config.regime_filter:
-            # Need ≥regime_ma_period trading days (~300 calendar days for MA200)
-            spy_days = max(strategy.config.regime_ma_period * 2, 300)
-            spy_df = fetcher.fetch("SPY", days=spy_days)
+            # Pull the most recent N SPY bars by row order rather than by a
+            # calendar-days window — when the seeded history is older than the
+            # lookback (Cloud SQL after a partial reseed), the date-window path
+            # collapses to ~30 bars and MA200 silently falls back.  Direct SQL
+            # with LIMIT N gives a stable MA input regardless of seed freshness.
+            spy_limit = max(strategy.config.regime_ma_period + 50, 250)
+            spy_df = _fetch_recent_close_series(fetcher, "SPY", spy_limit)
             # Log SPY data freshness before computing regime
             if not spy_df.empty:
                 import datetime as _dt

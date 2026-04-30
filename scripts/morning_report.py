@@ -62,7 +62,62 @@ def _connect():
     return psycopg2.connect(_database_url())
 
 
+def _compute_regime_from_ohlcv() -> dict:
+    """Compute regime fresh from the latest 250 SPY bars in `ohlcv`.
+
+    Bypasses the date-window filter on PostgresOhlcvFetcher.fetch — that path
+    returned only ~32 bars on Cloud SQL when the seeded history was older than
+    the lookback window.  Pulling the latest 250 rows by row order gives a
+    stable MA200 input regardless of seed freshness.
+    """
+    import pandas as pd
+    _STRATEGY_DIR_LOCAL = os.path.join(os.path.dirname(_SCRIPTS_DIR), "strategy")
+    if _STRATEGY_DIR_LOCAL not in sys.path:
+        sys.path.insert(0, _STRATEGY_DIR_LOCAL)
+    from src.signals.momentum import MomentumStrategy, MomentumConfig  # noqa: E402
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT timestamp, close
+                FROM ohlcv
+                WHERE symbol = 'SPY'
+                ORDER BY timestamp DESC
+                LIMIT 250
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return {}
+    df = pd.DataFrame(rows, columns=["timestamp", "close"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["close"] = df["close"].astype(float)
+    df = df.set_index("timestamp").sort_index()
+    strat = MomentumStrategy(MomentumConfig())
+    regime = strat.update_regime(df)
+    spy_price = float(strat._spy_price or 0.0)
+    spy_ma200 = float(strat._spy_ma200 or 0.0)
+    delta_pct = ((spy_price - spy_ma200) / spy_ma200 * 100.0) if spy_ma200 > 0 else 0.0
+    return {
+        "regime": regime,
+        "spy_price": spy_price,
+        "spy_ma200": spy_ma200,
+        "delta_pct": delta_pct,
+    }
+
+
 def _query_regime() -> dict:
+    """Return the current regime + SPY/MA200/delta dict.
+
+    Tries `system_metrics.market_regime` first (single-source-of-truth shared
+    with Grafana), then falls back to a fresh computation from `ohlcv` so the
+    morning report is never stuck on UNKNOWN if the daily strategy run hasn't
+    written the row yet.
+    """
     try:
         conn = _connect()
         try:
@@ -79,16 +134,25 @@ def _query_regime() -> dict:
                     labels, recorded_at = row
                     if not isinstance(labels, dict):
                         labels = json.loads(labels or "{}")
-                    return {
+                    cached = {
                         "regime": labels.get("regime", ""),
                         "spy_price": float(labels.get("spy_price", 0.0)),
                         "spy_ma200": float(labels.get("spy_ma200", 0.0)),
                         "delta_pct": float(labels.get("delta_pct", 0.0)),
                     }
+                    if cached["regime"] and cached["spy_price"] > 0 and cached["spy_ma200"] > 0:
+                        return cached
         finally:
             conn.close()
     except Exception as e:
         logger.warning("Regime query failed: %s", e)
+
+    try:
+        fresh = _compute_regime_from_ohlcv()
+        if fresh:
+            return fresh
+    except Exception as e:
+        logger.warning("Regime fallback (ohlcv) failed: %s", e)
     return {}
 
 
