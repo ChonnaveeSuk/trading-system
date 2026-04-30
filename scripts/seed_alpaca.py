@@ -51,8 +51,8 @@ DEFAULT_SYMBOLS = [
     "SPY", "IWM",
     # Crypto
     "BTC-USD",
-    # Defensive
-    "GLD", "TLT",
+    # Defensive (bonds only — GLD removed 2026-04-30 to avoid PM re-entry)
+    "TLT", "BND",
     # VIX proxy (data-only; consumed by VIX filter in MomentumStrategy)
     "VIXY",
 ]

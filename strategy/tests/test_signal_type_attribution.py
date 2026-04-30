@@ -72,6 +72,7 @@ def test_client_order_id_encodes_momentum():
 
     with patch.object(client, "_get_account", return_value=account_resp), \
          patch.object(client, "_get_positions", return_value=positions_resp), \
+         patch.object(client, "_get_open_orders", return_value=[]), \
          patch.object(client, "_submit_market_order", return_value=order_resp), \
          patch.object(client, "_record_order_pg") as mock_record, \
          patch("time.sleep"):
@@ -97,6 +98,7 @@ def test_client_order_id_encodes_trend_ride():
 
     with patch.object(client, "_get_account", return_value=account_resp), \
          patch.object(client, "_get_positions", return_value=positions_resp), \
+         patch.object(client, "_get_open_orders", return_value=[]), \
          patch.object(client, "_submit_market_order", return_value=order_resp), \
          patch.object(client, "_record_order_pg") as mock_record, \
          patch("time.sleep"):
@@ -190,6 +192,7 @@ def test_missing_signal_type_defaults_to_momentum(caplog):
 
     with patch.object(client, "_get_account", return_value=account_resp), \
          patch.object(client, "_get_positions", return_value=positions_resp), \
+         patch.object(client, "_get_open_orders", return_value=[]), \
          patch.object(client, "_submit_market_order", return_value=order_resp), \
          patch.object(client, "_record_order_pg") as mock_record, \
          patch("time.sleep"), \

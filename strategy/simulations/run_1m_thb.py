@@ -48,8 +48,8 @@ SYMBOLS = [
     "SPY", "IWM",
     # Crypto
     "BTC-USD",
-    # Defensive
-    "GLD", "TLT",
+    # Defensive (bonds only — GLD removed 2026-04-30 to avoid PM re-entry)
+    "TLT", "BND",
 ]
 OUTPUT_PATH          = os.path.join(os.path.dirname(__file__), "1m_thb_simulation.json")
 

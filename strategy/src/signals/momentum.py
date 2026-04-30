@@ -61,7 +61,8 @@ PRODUCTION_MIN_BARS = 252  # Per design — flag if below this
 # back to "other" — keep in sync with the trading universe.
 # Tech-focus rebalance (2026-04-29): replaced the 30-symbol precious-metals-heavy
 # universe after 100% concentration in precious_metals → -$4,825 cumulative loss.
-# GLD retained as a defensive hedge; all other PM names dropped.
+# 2026-04-30: GLD removed (precious metal — re-buy risk after PM unwind);
+# replaced with BND (Vanguard Total Bond ETF) as a true non-correlated hedge.
 SYMBOL_TO_SECTOR: dict[str, str] = {
     # Big Tech
     "AAPL": "big_tech", "MSFT": "big_tech", "NVDA": "big_tech",
@@ -74,8 +75,8 @@ SYMBOL_TO_SECTOR: dict[str, str] = {
     "SPY": "broad_market", "IWM": "broad_market",
     # Crypto
     "BTC-USD": "crypto",
-    # Defensive (gold + long-duration bonds — risk-off hedges)
-    "GLD": "defensive", "TLT": "defensive",
+    # Defensive (bonds only — risk-off hedges, no precious metals)
+    "TLT": "defensive", "BND": "defensive",
 }
 
 

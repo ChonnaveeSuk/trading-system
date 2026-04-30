@@ -55,6 +55,7 @@ _YFINANCE_TICKER: dict[str, str] = {
     "XLK":     "XLK",
     "XLF":     "XLF",
     "TLT":     "TLT",
+    "BND":     "BND",
     "IEF":     "IEF",
     "GDX":     "GDX",
     "GDXJ":    "GDXJ",

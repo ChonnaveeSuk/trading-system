@@ -73,8 +73,8 @@ SYMBOLS = [
     "SPY", "IWM",
     # Crypto (sector: crypto)
     "BTC-USD",
-    # Defensive (sector: defensive)
-    "GLD", "TLT",
+    # Defensive (sector: defensive — bonds only, no precious metals)
+    "TLT", "BND",
 ]
 
 # All 16 symbols are Alpaca-paper-tradeable.
