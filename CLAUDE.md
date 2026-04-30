@@ -3,10 +3,10 @@
 
 ## Current Status
 
-**Phase:** 5 — 90-day paper trading IN PROGRESS (day 22/90, started 2026-04-07)
+**Phase:** 5 — 90-day paper trading IN PROGRESS (day 24/90, started 2026-04-07)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-29 ICT (tech-focus rebalance — 16-symbol universe replaces precious-metals-heavy 30 after 2026-04-28 100% concentration incident)
-**Tests:** 287/287 passing (47 Rust + 240 Python), Clippy clean
+**Last updated:** 2026-04-30 ICT (pre-May-4-BUY audit — sector dashboard rebucketed, BND swap completed, conftest.py added for test infra)
+**Tests:** 294/294 passing (47 Rust + 247 Python), 14 skipped, Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
 **Strategy:** Sharpe 3.50 (backtest, equity-curve based), MaxDD 4.31%, ~749 THB/day on 16 tech-focused symbols
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
@@ -413,18 +413,19 @@ cat /tmp/quantai_first_fill_result.json                # read structured result
 **File:** `strategy/simulations/1m_thb_simulation.json`
 **Script:** `strategy/simulations/run_1m_thb.py`
 
-### Latest (2026-03-31) — TARGET ACHIEVED
+### Production (2026-04-29) — 16-symbol tech-focus universe
 
 | Metric | Result |
 |--------|--------|
-| Starting capital | 1,000,000 THB ($28,000 @ 35.7 THB/USD) |
-| Period | 2024-05-14 → 2026-03-30 (686 trading days) |
-| Total P&L | +196,742.66 THB (+19.68%) |
-| **Avg daily P&L** | **286.80 THB/day** ✅ (target: 200+) |
-| Avg monthly P&L | 8,713 THB/month |
-| Max drawdown | 4.00% (−49,906 THB) |
-| Total trades | 166 across 31 symbols |
-| Symbols | 31 curated net-positive symbols |
+| Period | 2024-06-07 → 2026-04-28 (663 trading days) |
+| Sharpe ratio (equity-curve) | 3.50 |
+| Max drawdown | 4.31% |
+| Avg daily P&L | ~749 THB/day |
+| Total trades | 248 |
+| Concentration | max 31% per sector (hard-bounded by sector gate) |
+
+**Top per-symbol Sharpe (walk-forward):**
+GOOGL 2.84, SMH 1.94, SPY 1.25, IWM 1.22, NVDA 1.10
 
 **Strategy config:** `MomentumConfig(fast_period=5, slow_period=15, vol_period=10, bb_period=0)`
 - RSI 30/70 strict thresholds (mean-reversion on oversold/overbought extremes)
@@ -433,15 +434,20 @@ cat /tmp/quantai_first_fill_result.json                # read structured result
 - No Bollinger Band signals (BB SELL removed — cuts trend profits prematurely)
 - No trend filter (200-day MA blocked 2024 bull market during warmup period)
 
-**Backtest performance (2026-04-05, with ATR sizing):**
+### Historical (2026-04-05) — 30-symbol precious-metals-heavy universe (RETIRED)
+
+Kept here for reference only. This universe was retired on 2026-04-29 after the
+2026-04-28 100% PM concentration incident. Do not use these stats for current
+gate decisions.
 
 | Metric | Result |
 |--------|--------|
 | Sharpe ratio | 1.61 |
 | Max drawdown | 8.86% |
 | Avg daily P&L | ~992 THB/day |
+| Symbols | 30 (16/30 = 53% precious-metals) |
 
-**Top performers (THB/day):**
+**Top performers under old universe (THB/day):**
 CDE(55.0), AEM(35.2), AGI(28.6), PAAS(28.3), HL(25.0), GOLD(22.4),
 GDX(21.3), SLV(18.9), BTC-USD(18.8), RING(18.1), GDXJ(17.2)
 
@@ -458,8 +464,8 @@ SYMBOLS = [
     "SPY", "IWM",
     # Crypto
     "BTC-USD",
-    # Defensive (gold + long-duration bonds)
-    "GLD", "TLT",
+    # Defensive (long-duration bonds — GLD removed 2026-04-30 to avoid PM re-entry)
+    "TLT", "BND",
 ]
 ```
 

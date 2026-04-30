@@ -108,7 +108,7 @@ def _load_credentials() -> tuple[str, str]:
 class AlpacaFetcher:
     """Download daily OHLCV bars from Alpaca and upsert into PostgreSQL.
 
-    Supports the 31 production symbols from CLAUDE.md.
+    Supports the 16 production symbols + VIXY (data-only) from CLAUDE.md.
     Skips symbols in _ALPACA_UNSUPPORTED (keeps existing DB rows).
     """
 

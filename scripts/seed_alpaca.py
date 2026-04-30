@@ -65,7 +65,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--symbols", nargs="+", default=DEFAULT_SYMBOLS,
-        help="Symbols to fetch (default: all 31 production symbols)",
+        help="Symbols to fetch (default: 16 production symbols + VIXY)",
     )
     parser.add_argument(
         "--days", type=int, default=DEFAULT_DAYS,
