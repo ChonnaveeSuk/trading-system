@@ -828,14 +828,34 @@ class MomentumStrategy:
         # SELL signals always pass regardless of regime (exit / take profit).
         # SPY data must be pre-loaded via update_regime() before calling this.
         if self.config.regime_filter and direction == Direction.BUY:
-            if self._regime == "BEAR":
-                direction = Direction.HOLD
-                score = 0.0
-            elif self._regime == "NEUTRAL":
-                score = round(score * 0.7, 4)
-                if score < 0.55:
+            _sector = sector_for(symbol)
+            if _sector == "defensive":
+                # Defensive assets (TLT, BND) are counter-cyclical:
+                # BUY only in BEAR/NEUTRAL (flight-to-safety regime).
+                # Suppress BUY in BULL — bonds underperform equities in bull markets.
+                if self._regime == "BULL":
+                    logger.info(
+                        "%s: defensive sector BUY suppressed in BULL regime",
+                        symbol,
+                    )
                     direction = Direction.HOLD
                     score = 0.0
+                elif self._regime == "NEUTRAL":
+                    score = round(score * 0.7, 4)
+                    if score < 0.55:
+                        direction = Direction.HOLD
+                        score = 0.0
+                # BEAR: allow BUY at full score (flight-to-safety)
+            else:
+                # Non-defensive: standard regime filter
+                if self._regime == "BEAR":
+                    direction = Direction.HOLD
+                    score = 0.0
+                elif self._regime == "NEUTRAL":
+                    score = round(score * 0.7, 4)
+                    if score < 0.55:
+                        direction = Direction.HOLD
+                        score = 0.0
 
         # ── VIX (volatility) filter ───────────────────────────────────────────
         # PANIC:   block all new BUY orders entirely (score=0).

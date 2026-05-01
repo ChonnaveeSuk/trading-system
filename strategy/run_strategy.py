@@ -71,14 +71,16 @@ SYMBOLS = [
     "TSLA", "AMD", "AVGO",
     # Broad market (sector: broad_market)
     "SPY", "IWM",
-    # Crypto (sector: crypto)
+    # Crypto (backtest only — excluded from live trading, walk-forward FAIL)
     "BTC-USD",
     # Defensive (sector: defensive — bonds only, no precious metals)
     "TLT", "BND",
 ]
 
 # All 16 symbols are Alpaca-paper-tradeable.
-LIVE_SYMBOLS = list(SYMBOLS)
+# BTC-USD excluded from live trading: walk-forward FAIL (Sharpe=0.10).
+# Still included in SYMBOLS for backtest/research purposes.
+LIVE_SYMBOLS = [s for s in SYMBOLS if s not in {"BTC-USD"}]
 
 # Max calendar days of staleness before skipping a symbol in live mode.
 # 5 trading days = 7 calendar days covers weekends + 1 holiday.
@@ -248,7 +250,7 @@ def _print_walkforward(wf) -> None:
         print(f"\n  ↳ {note}")
 
 
-def run_live(symbols: list[str]) -> None:
+def run_live(symbols: list[str], dry_run: bool = False) -> None:
     """Generate live signals and submit orders.
 
     Two paths:
@@ -261,6 +263,8 @@ def run_live(symbols: list[str]) -> None:
         print("\n" + "=" * 70)
         print(" LIVE SIGNAL → ALPACA DIRECT (REST)")
         print("=" * 70)
+        if dry_run:
+            print("  *** DRY RUN — signals will be generated but NO orders submitted ***")
         try:
             from src.bridge.alpaca_direct import AlpacaDirectClient
             client = AlpacaDirectClient()
@@ -272,6 +276,8 @@ def run_live(symbols: list[str]) -> None:
         print("\n" + "=" * 70)
         print(" PHASE 2 — LIVE SIGNAL → RUST OMS (gRPC)")
         print("=" * 70)
+        if dry_run:
+            print("  *** DRY RUN — signals will be generated but NO orders submitted ***")
         try:
             client = TradingBridgeClient(host=GRPC_HOST, port=GRPC_PORT, timeout=5.0)
             client.connect()
@@ -462,23 +468,27 @@ def run_live(symbols: list[str]) -> None:
                 print(f"  {symbol:<10}   HOLD — not sent to OMS")
                 continue
 
-            try:
-                response = client.submit_signal(signal, current_price=current_price)
-                if response and response.accepted:
-                    print(f"  {symbol:<10}   ✓ ORDER ACCEPTED: {response.order_id}")
-                    counts["orders_submitted"] += 1
-                    # Telegram: BUY/SELL order confirmed
-                    qty_str = str(signal.suggested_quantity) if signal.suggested_quantity else "?"
-                    _telegram_alert(
-                        f"{signal.direction.value} Order Submitted\n"
-                        f"Symbol: {symbol} | Price: ${current_price:.2f} | "
-                        f"Qty: {qty_str} | Score: {signal.score:.2f}",
-                        level=signal.direction.value,
-                    )
-                elif response:
-                    print(f"  {symbol:<10}   ✗ REJECTED: {response.message}")
-            except Exception as e:
-                print(f"  {symbol:<10}   ERROR: {e}")
+            if dry_run:
+                qty_str = str(signal.suggested_quantity) if signal.suggested_quantity else "?"
+                print(f"  {symbol:<10}   [DRY RUN] would submit {signal.direction.value} "
+                      f"qty={qty_str} score={signal.score:.4f} price=${current_price:.2f}")
+            else:
+                try:
+                    response = client.submit_signal(signal, current_price=current_price)
+                    if response and response.accepted:
+                        print(f"  {symbol:<10}   ✓ ORDER ACCEPTED: {response.order_id}")
+                        counts["orders_submitted"] += 1
+                        qty_str = str(signal.suggested_quantity) if signal.suggested_quantity else "?"
+                        _telegram_alert(
+                            f"{signal.direction.value} Order Submitted\n"
+                            f"Symbol: {symbol} | Price: ${current_price:.2f} | "
+                            f"Qty: {qty_str} | Score: {signal.score:.2f}",
+                            level=signal.direction.value,
+                        )
+                    elif response:
+                        print(f"  {symbol:<10}   ✗ REJECTED: {response.message}")
+                except Exception as e:
+                    print(f"  {symbol:<10}   ERROR: {e}")
 
     client.disconnect()
 
@@ -508,6 +518,12 @@ def main() -> None:
         default=None,
         help="Override symbols (default: SYMBOLS for backtest, LIVE_SYMBOLS for live)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Generate signals without submitting orders (safe for pre-market testing)",
+    )
     args = parser.parse_args()
 
     backtest_syms = args.symbols or SYMBOLS
@@ -517,7 +533,7 @@ def main() -> None:
         run_backtest(backtest_syms)
 
     if args.mode in ("live", "all"):
-        run_live(live_syms)
+        run_live(live_syms, dry_run=args.dry_run)
 
     # Check live MaxDD after any live run — alert if it exceeds 8% warning threshold
     if args.mode in ("live", "all"):

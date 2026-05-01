@@ -373,14 +373,16 @@ class TestLiveSymbols:
         assert set(LIVE_SYMBOLS).issubset(set(SYMBOLS))
 
     def test_live_symbols_non_empty(self):
-        """Post-rebalance universe is 16 tech-focused symbols."""
+        """Post-rebalance universe is 15 tech-focused symbols (BTC-USD excluded)."""
         from run_strategy import LIVE_SYMBOLS
         assert len(LIVE_SYMBOLS) >= 10
-        assert len(LIVE_SYMBOLS) == 16
+        assert len(LIVE_SYMBOLS) == 15
 
-    def test_btc_usd_in_live_symbols(self):
-        from run_strategy import LIVE_SYMBOLS
-        assert "BTC-USD" in LIVE_SYMBOLS
+    def test_btc_usd_excluded_from_live_symbols(self):
+        """BTC-USD removed from live trading: walk-forward FAIL (Sharpe=0.10)."""
+        from run_strategy import LIVE_SYMBOLS, SYMBOLS
+        assert "BTC-USD" in SYMBOLS  # still in backtest universe
+        assert "BTC-USD" not in LIVE_SYMBOLS
 
     def test_spy_in_live_symbols(self):
         from run_strategy import LIVE_SYMBOLS

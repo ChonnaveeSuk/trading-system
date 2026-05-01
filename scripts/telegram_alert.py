@@ -126,6 +126,17 @@ def send_alert(message: str, level: str = "INFO") -> bool:
     emoji = LEVEL_EMOJI.get(level.upper(), "🔵")
     full_message = f"{emoji} {message}"
 
+    TELEGRAM_MAX_LENGTH = 4096
+    TRUNCATION_SUFFIX = "\n\n⚠️ [truncated — message too long]"
+    if len(full_message) > TELEGRAM_MAX_LENGTH:
+        original_len = len(full_message)
+        cutoff = TELEGRAM_MAX_LENGTH - len(TRUNCATION_SUFFIX)
+        full_message = full_message[:cutoff] + TRUNCATION_SUFFIX
+        logger.warning(
+            "Telegram message truncated from %d to %d chars",
+            original_len, TELEGRAM_MAX_LENGTH,
+        )
+
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",

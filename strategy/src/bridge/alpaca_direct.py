@@ -76,6 +76,16 @@ _MAX_SECTOR_PCT = Decimal("0.30")      # max sector exposure as fraction of equi
 _DEFAULT_STOP_LOSS_PCT = 0.05          # close when unrealized_pl ≤ -5%
 _DEFAULT_STOP_WARN_PCT = 0.03          # log WARN when unrealized_pl ≤ -3%
 
+# Per-sector stop loss overrides — wider room for high-volatility sectors.
+_SECTOR_STOP_LOSS_PCT: dict[str, float] = {
+    "growth": 0.07,  # TSLA, AMD, AVGO — ATR typically 5-8%/day
+}
+
+def _effective_stop_loss_pct(symbol: str) -> float:
+    """Return per-sector stop loss threshold, falling back to default."""
+    from ..signals.momentum import sector_for
+    return _SECTOR_STOP_LOSS_PCT.get(sector_for(symbol), _DEFAULT_STOP_LOSS_PCT)
+
 # Alpaca API rate limit: 200 req/min on paper. A brief sleep keeps us safe.
 _API_SLEEP_S = 0.3
 
@@ -440,12 +450,11 @@ class AlpacaDirectClient:
             logger.info("check_and_trigger_stops: no open positions")
             return results
 
-        # Negative thresholds for direct comparison with unrealized_plpc.
-        stop_threshold = -abs(stop_loss_pct)
-        warn_threshold = -abs(warn_pct)
-
         for alpaca_symbol, pos in positions.items():
             yf_symbol = _from_alpaca_symbol(alpaca_symbol)
+            effective_stop = _effective_stop_loss_pct(yf_symbol)
+            stop_threshold = -abs(effective_stop)
+            warn_threshold = -abs(warn_pct)  # warn_pct param remains caller-controlled
             try:
                 plpc_str = pos.get("unrealized_plpc")
                 if plpc_str is None:
@@ -484,7 +493,7 @@ class AlpacaDirectClient:
                             telegram_alert(
                                 f"🛑 Stop Loss Triggered\n"
                                 f"Symbol: {yf_symbol} | Loss: {plpc*100:.2f}%\n"
-                                f"Threshold: -{stop_loss_pct*100:.1f}% | "
+                                f"Threshold: -{effective_stop*100:.1f}% | "
                                 f"Action: market SELL submitted",
                                 level="CRITICAL",
                             )
@@ -520,7 +529,7 @@ class AlpacaDirectClient:
             else:
                 logger.warning(
                     "STOP LOSS WARN: %s at %.2f%% — approaching -%.1f%% stop",
-                    yf_symbol, plpc * 100, stop_loss_pct * 100,
+                    yf_symbol, plpc * 100, effective_stop * 100,
                 )
                 results.append(StopLossResult(
                     symbol=yf_symbol,

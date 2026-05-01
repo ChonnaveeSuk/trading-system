@@ -682,6 +682,51 @@ class TestStopLoss:
         assert results == []
         client._session.delete.assert_not_called()
 
+    def test_growth_sector_uses_wider_stop(self):
+        """TSLA at -6% should NOT trigger (growth stop is -7%)."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("TSLA", "-0.06"),
+        ])
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert len(results) == 1
+        assert results[0].warned is True
+        assert results[0].triggered is False
+        client._session.delete.assert_not_called()
+
+    def test_growth_sector_triggers_at_seven_pct(self):
+        """TSLA at -7.5% SHOULD trigger (exceeds growth stop -7%)."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("TSLA", "-0.075"),
+        ])
+        client._session.delete.return_value = _mock_order_response(
+            order_id="tsla-stop-001", status="pending_new",
+        )
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        assert len(results) == 1
+        r = results[0]
+        assert r.triggered is True
+        assert r.order_id == "tsla-stop-001"
+
+    def test_mixed_sectors_independent_thresholds(self):
+        """AAPL -5.5% triggers (big_tech -5%), TSLA -5.5% warns only (growth -7%)."""
+        client = _make_client()
+        client._session.get.return_value = _mock_positions([
+            _pos_with_pl("AAPL", "-0.055"),
+            _pos_with_pl("TSLA", "-0.055"),
+        ])
+        client._session.delete.return_value = _mock_order_response(
+            order_id="aapl-stop-001", status="pending_new",
+        )
+        results = client.check_and_trigger_stops(stop_loss_pct=0.05)
+        triggered = [r for r in results if r.triggered]
+        warned = [r for r in results if r.warned]
+        assert len(triggered) == 1
+        assert triggered[0].symbol == "AAPL"
+        assert len(warned) == 1
+        assert warned[0].symbol == "TSLA"
+
 
 # ── Context manager ───────────────────────────────────────────────────────────
 

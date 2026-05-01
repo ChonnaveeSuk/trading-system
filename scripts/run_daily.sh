@@ -148,10 +148,10 @@ log "Step 0: Health snapshot done."
 # ALPACA_FETCHER=1  → use Alpaca Markets Data API (required on Cloud Run — Yahoo Finance blocks GCP IPs)
 # ALPACA_FETCHER=0  → use yfinance (default for local WSL dev)
 if [[ "${ALPACA_FETCHER:-0}" == "1" ]]; then
-    log "Step 1/4: Fetching latest OHLCV from Alpaca Markets (last 7 days)…"
+    log "Step 1/4: Fetching latest OHLCV from Alpaca Markets (last ${SEED_DAYS:-7} days)…"
     # Non-fatal: individual symbol failures are logged but don't abort the run.
     # Strategy uses whatever data is already in the DB if a symbol fails.
-    python3 "${SCRIPT_DIR}/seed_alpaca.py" --days 7 || \
+    python3 "${SCRIPT_DIR}/seed_alpaca.py" --days "${SEED_DAYS:-7}" || \
         log "Step 1/4: OHLCV fetch had errors (non-fatal — using existing DB data)."
 else
     log "Step 1/4: Fetching latest OHLCV from yfinance (last 5 days)…"

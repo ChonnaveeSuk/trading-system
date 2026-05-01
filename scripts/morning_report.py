@@ -828,6 +828,14 @@ def _build_report_data() -> ReportData:
         sections.append(sector_section)
     sections.extend([pnl_section, gate_section, next_section])
     message = "\n\n".join(sections)
+    if len(message) > 3800:  # leave room for safety margin
+        if regime and spy_price and spy_ma200:
+            sections[1] = (
+                f"\U0001f30d {r_emoji} {regime} | "
+                f"SPY ${spy_price:.0f} | MA200 ${spy_ma200:.0f} | "
+                f"{delta_pct:+.1f}%"
+            )
+        message = "\n\n".join(sections)
 
     return ReportData(
         message=message,

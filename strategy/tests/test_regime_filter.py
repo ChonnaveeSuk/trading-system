@@ -290,6 +290,62 @@ class TestGenerateSignalRegime:
         assert signal.features["regime"] == "BEAR"
 
 
+class TestDefensiveSectorRegimeFilter:
+    """Defensive sector (TLT/BND) BUY suppressed in BULL, allowed in BEAR."""
+
+    def _make_strategy(self, regime: str) -> MomentumStrategy:
+        # calendar_filter / earnings_filter disabled so the synthetic dataset
+        # (which ends "today") is not date-blocked by real-world NFP/earnings.
+        cfg = MomentumConfig(
+            fast_period=5, slow_period=15, vol_period=10, bb_period=0,
+            regime_filter=True, regime_ma_period=200,
+            calendar_filter=False, earnings_filter=False,
+        )
+        strat = MomentumStrategy(cfg)
+        strat._regime = regime
+        return strat
+
+    def _make_buy_df(self, n: int = 300) -> pd.DataFrame:
+        """OHLCV with sharp pullback at the end → reliably triggers RSI BUY."""
+        dates = _recent_dates(n)
+        close = np.concatenate([
+            np.linspace(100, 130, n - 20),
+            np.linspace(130, 90, 20),
+        ])
+        volume = np.full(n, 1_000_000.0)
+        high = close * 1.005
+        low = close * 0.995
+        return pd.DataFrame(
+            {"open": close, "high": high, "low": low,
+             "close": close, "volume": volume, "vwap": close},
+            index=dates,
+        )
+
+    def test_defensive_buy_suppressed_in_bull(self):
+        """TLT BUY signal should be suppressed when regime is BULL."""
+        strat = self._make_strategy("BULL")
+        df = self._make_buy_df()
+        signal = strat.generate_signal("TLT", df, portfolio_value=100_000.0)
+        assert signal.direction == Direction.HOLD
+        assert signal.score == 0.0
+
+    def test_defensive_buy_allowed_in_bear(self):
+        """TLT BUY signal should pass through in BEAR regime."""
+        strat = self._make_strategy("BEAR")
+        df = self._make_buy_df()
+        signal = strat.generate_signal("TLT", df, portfolio_value=100_000.0)
+        assert signal.direction == Direction.BUY
+        assert signal.score > 0.0
+
+    def test_non_defensive_buy_suppressed_in_bear(self):
+        """AAPL BUY signal should still be suppressed in BEAR (unchanged behavior)."""
+        strat = self._make_strategy("BEAR")
+        df = self._make_buy_df()
+        signal = strat.generate_signal("AAPL", df, portfolio_value=100_000.0)
+        assert signal.direction == Direction.HOLD
+        assert signal.score == 0.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # generate_signals_series() with regime_df (backtest path)
 # ─────────────────────────────────────────────────────────────────────────────
