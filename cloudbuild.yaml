@@ -1,0 +1,5 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'Dockerfile.runner', '-t', 'asia-southeast1-docker.pkg.dev/quantai-trading-paper/quantai/runner:latest', '.']
+images:
+  - 'asia-southeast1-docker.pkg.dev/quantai-trading-paper/quantai/runner:latest'
