@@ -345,6 +345,34 @@ class TestDefensiveSectorRegimeFilter:
         assert signal.direction == Direction.HOLD
         assert signal.score == 0.0
 
+    def _make_spy_df(self, regime: str, n: int = 400) -> pd.DataFrame:
+        """SPY frame whose bar-by-bar regime matches `regime` for the post-warmup window."""
+        if regime == "BULL":
+            return make_spy_bull(n)
+        if regime == "BEAR":
+            return make_spy_bear(n)
+        if regime == "NEUTRAL":
+            return make_spy_neutral(n)
+        raise ValueError(f"unknown regime: {regime}")
+
+    def test_vectorized_defensive_buy_suppressed_in_bull(self):
+        """TLT vectorized: BUY suppressed in BULL regime bars."""
+        strat = self._make_strategy("BULL")
+        df = self._make_buy_df()
+        spy_df = self._make_spy_df(regime="BULL")
+        result = strat.generate_signals_series("TLT", df, regime_df=spy_df)
+        buy_rows = result[result["direction"] == "BUY"]
+        assert len(buy_rows) == 0, f"Expected no BUY in BULL for TLT, got {len(buy_rows)}"
+
+    def test_vectorized_defensive_buy_allowed_in_bear(self):
+        """TLT vectorized: BUY allowed in BEAR regime bars."""
+        strat = self._make_strategy("BEAR")
+        df = self._make_buy_df()
+        spy_df = self._make_spy_df(regime="BEAR")
+        result = strat.generate_signals_series("TLT", df, regime_df=spy_df)
+        buy_rows = result[result["direction"] == "BUY"]
+        assert len(buy_rows) > 0, "Expected at least one BUY in BEAR for TLT"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # generate_signals_series() with regime_df (backtest path)

@@ -1261,37 +1261,72 @@ class MomentumStrategy:
                 signals.loc[has_data & ~is_bear & ~is_neutral, "regime"] = "BULL"
 
                 buy_mask = signals["direction"] == Direction.BUY.value
+                _is_defensive = sector_for(symbol) == "defensive"
 
-                # BEAR: suppress all BUY signals
-                bear_buy = buy_mask & is_bear
-                signals.loc[bear_buy, "direction"] = Direction.HOLD.value
-                signals.loc[bear_buy, "score"] = 0.0
+                if _is_defensive:
+                    # Defensive assets (TLT, BND): counter-cyclical
+                    # BUY suppressed in BULL, allowed in BEAR/NEUTRAL
+                    bull_buy = buy_mask & ~is_bear & ~is_neutral & has_data
+                    signals.loc[bull_buy, "direction"] = Direction.HOLD.value
+                    signals.loc[bull_buy, "score"] = 0.0
 
-                # NEUTRAL: reduce BUY conviction
-                buy_after_bear = signals["direction"] == Direction.BUY.value
-                neutral_buy = buy_after_bear & is_neutral
-                signals.loc[neutral_buy, "score"] = (
-                    signals.loc[neutral_buy, "score"] * 0.7
-                ).round(4)
-                # Convert to HOLD if score fell below risk engine minimum
-                low_neutral = neutral_buy & (signals["score"] < 0.55)
-                signals.loc[low_neutral, "direction"] = Direction.HOLD.value
-                signals.loc[low_neutral, "score"] = 0.0
+                    # NEUTRAL: reduce conviction (same haircut as non-defensive)
+                    buy_after_bull = signals["direction"] == Direction.BUY.value
+                    neutral_buy = buy_after_bull & is_neutral
+                    signals.loc[neutral_buy, "score"] = (
+                        signals.loc[neutral_buy, "score"] * 0.7
+                    ).round(4)
+                    low_neutral = neutral_buy & (signals["score"] < 0.55)
+                    signals.loc[low_neutral, "direction"] = Direction.HOLD.value
+                    signals.loc[low_neutral, "score"] = 0.0
+                    # BEAR: allow BUY at full score (flight-to-safety)
+                else:
+                    # Non-defensive: standard regime filter
+                    # BEAR: suppress all BUY signals
+                    bear_buy = buy_mask & is_bear
+                    signals.loc[bear_buy, "direction"] = Direction.HOLD.value
+                    signals.loc[bear_buy, "score"] = 0.0
+
+                    # NEUTRAL: reduce BUY conviction
+                    buy_after_bear = signals["direction"] == Direction.BUY.value
+                    neutral_buy = buy_after_bear & is_neutral
+                    signals.loc[neutral_buy, "score"] = (
+                        signals.loc[neutral_buy, "score"] * 0.7
+                    ).round(4)
+                    low_neutral = neutral_buy & (signals["score"] < 0.55)
+                    signals.loc[low_neutral, "direction"] = Direction.HOLD.value
+                    signals.loc[low_neutral, "score"] = 0.0
 
             else:
                 # No bar-by-bar data — fall back to cached regime for all bars
-                if self._regime == "BEAR":
-                    bear_mask = signals["direction"] == Direction.BUY.value
-                    signals.loc[bear_mask, "direction"] = Direction.HOLD.value
-                    signals.loc[bear_mask, "score"] = 0.0
-                elif self._regime == "NEUTRAL":
-                    buy_mask = signals["direction"] == Direction.BUY.value
-                    signals.loc[buy_mask, "score"] = (
-                        signals.loc[buy_mask, "score"] * 0.7
-                    ).round(4)
-                    low = buy_mask & (signals["score"] < 0.55)
-                    signals.loc[low, "direction"] = Direction.HOLD.value
-                    signals.loc[low, "score"] = 0.0
+                _is_defensive = sector_for(symbol) == "defensive"
+                if _is_defensive:
+                    if self._regime == "BULL":
+                        bull_mask = signals["direction"] == Direction.BUY.value
+                        signals.loc[bull_mask, "direction"] = Direction.HOLD.value
+                        signals.loc[bull_mask, "score"] = 0.0
+                    elif self._regime == "NEUTRAL":
+                        buy_mask = signals["direction"] == Direction.BUY.value
+                        signals.loc[buy_mask, "score"] = (
+                            signals.loc[buy_mask, "score"] * 0.7
+                        ).round(4)
+                        low = buy_mask & (signals["score"] < 0.55)
+                        signals.loc[low, "direction"] = Direction.HOLD.value
+                        signals.loc[low, "score"] = 0.0
+                    # BEAR: allow full BUY
+                else:
+                    if self._regime == "BEAR":
+                        bear_mask = signals["direction"] == Direction.BUY.value
+                        signals.loc[bear_mask, "direction"] = Direction.HOLD.value
+                        signals.loc[bear_mask, "score"] = 0.0
+                    elif self._regime == "NEUTRAL":
+                        buy_mask = signals["direction"] == Direction.BUY.value
+                        signals.loc[buy_mask, "score"] = (
+                            signals.loc[buy_mask, "score"] * 0.7
+                        ).round(4)
+                        low = buy_mask & (signals["score"] < 0.55)
+                        signals.loc[low, "direction"] = Direction.HOLD.value
+                        signals.loc[low, "score"] = 0.0
 
         # ── VIX (volatility) filter (vectorised) ──────────────────────────────
         # PANIC bars block all new BUY signals (score=0). CAUTION bars do NOT
