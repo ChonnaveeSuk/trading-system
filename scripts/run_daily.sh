@@ -195,6 +195,12 @@ log "Step 3/4: Updating daily_pnl table…"
 _run_step "Step 3/4: update_daily_pnl" python3 "${SCRIPT_DIR}/update_daily_pnl.py"
 log "Step 3/4: daily_pnl updated."
 
+# ── Step 3.2: Compute 90-day gate progress metrics ────────────────────────────
+# Non-fatal: gate_progress is observability, never a blocker for the run.
+log "Step 3.2: Computing gate progress metrics..."
+python3 "${SCRIPT_DIR}/gate_progress.py" || \
+    log "Step 3.2: Gate progress failed (non-fatal)."
+
 # ── Step 3.5: Send morning report via Telegram ────────────────────────────────
 # Comprehensive report: regime, signals, P&L, 90-day gate progress, next run.
 # Non-fatal: Telegram failure never aborts the daily run.
