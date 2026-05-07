@@ -198,14 +198,14 @@ def insert_fill_to_pg(
                 INSERT INTO orders (
                     client_order_id, symbol, side, quantity, order_type,
                     limit_price, stop_price, stop_loss_price, signal_score,
-                    status, strategy_id, created_at, updated_at
+                    test_trade, status, strategy_id, created_at, updated_at
                 ) VALUES (
                     %s, %s, 'BUY', %s, 'MARKET',
                     NULL, NULL, NULL, 1.0,
-                    'FILLED', 'alpaca-test', %s, %s
+                    TRUE, 'FILLED', 'alpaca-test', %s, %s
                 )
                 ON CONFLICT (client_order_id) DO UPDATE
-                    SET status = 'FILLED', updated_at = EXCLUDED.updated_at
+                    SET status = 'FILLED', test_trade = TRUE, updated_at = EXCLUDED.updated_at
                 """,
                 (client_order_id, symbol, filled_qty, now, now),
             )

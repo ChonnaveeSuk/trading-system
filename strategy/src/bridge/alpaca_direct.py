@@ -312,6 +312,7 @@ class AlpacaDirectClient:
         signal_score: float,
         strategy_id: str,
         signal_type: str = "momentum",
+        test_trade: bool = False,
     ) -> None:
         """INSERT into orders table with status=SUBMITTED.
 
@@ -336,9 +337,10 @@ class AlpacaDirectClient:
                         INSERT INTO orders (
                             client_order_id, broker_order_id, symbol, side,
                             order_type, quantity, stop_loss, signal_score,
-                            strategy_id, signal_type, status, created_at, updated_at
+                            strategy_id, signal_type, test_trade, status,
+                            created_at, updated_at
                         ) VALUES (%s, %s, %s, %s, 'MARKET', %s, %s, %s, %s,
-                                  %s, 'SUBMITTED', %s, %s)
+                                  %s, %s, 'SUBMITTED', %s, %s)
                         ON CONFLICT (client_order_id) DO NOTHING
                         """,
                         (
@@ -351,6 +353,7 @@ class AlpacaDirectClient:
                             signal_score,
                             strategy_id,
                             signal_type,
+                            test_trade,
                             now,
                             now,
                         ),

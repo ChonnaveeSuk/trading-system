@@ -58,13 +58,6 @@ GATE_SHARPE_MIN_TRADES = 20      # below this → INSUFFICIENT (Sharpe noise)
 
 TRADING_DAYS_PER_YEAR = 252
 
-# Synthetic test fills to exclude from the gate trade count.
-# 2026-04-30 cluster = test_alpaca_connection.py round-trips, not
-# strategy signals.  Hardcoded per advisor note 2026-05-06.
-_SYNTHETIC_TEST_DATE = date(2026, 4, 30)
-_SYNTHETIC_TEST_SYMBOLS = ("EUR-USD", "BTC-USD", "AAPL")
-
-
 # ── Pure calculation primitives (DB-free; covered by unit tests) ─────────────
 
 def calc_sharpe(
@@ -208,12 +201,8 @@ CREATE TABLE IF NOT EXISTS gate_progress (
 """
 
 # Synthetic-fill exclusion clause — appended to any orders/fills query.
-# Inlined as static SQL because the values are hardcoded constants
-# (no untrusted input → no parameterization risk).
-_SYNTHETIC_FILTER_SQL = (
-    "NOT (symbol IN ('EUR-USD', 'BTC-USD', 'AAPL') "
-    "AND created_at::date = DATE '2026-04-30')"
-)
+# Excludes trades marked as test_trade=TRUE (set by test_alpaca_connection.py).
+_SYNTHETIC_FILTER_SQL = "NOT test_trade"
 
 
 def _fetch_trade_count(cur) -> int:

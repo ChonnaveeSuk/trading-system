@@ -642,12 +642,17 @@ class MomentumStrategy:
         # Uses rsi_period from config (default 7 for speed, 14 for Wilder standard).
         # RSI BUY is a standalone mean-reversion signal: no MA uptrend required.
         # Only the long-term trend filter (if trend_period > 0) gates BUY direction.
+        # Warm-up period: 2 * rsi_period bars required to mitigate initialization bias.
         rsi_series = _compute_rsi(close, self.config.rsi_period)
-        _rsi_raw = float(rsi_series.iloc[-1])
+        if len(df) >= 2 * self.config.rsi_period:
+            _rsi_raw = float(rsi_series.iloc[-1])
+        else:
+            _rsi_raw = float("nan")
+
         if np.isnan(_rsi_raw):
             logger.debug(
-                "%s: RSI NaN (insufficient history for period=%d) — using neutral 50.0",
-                symbol, self.config.rsi_period,
+                "%s: RSI NaN (insufficient history for warm-up period=%d) — using neutral 50.0",
+                symbol, 2 * self.config.rsi_period,
             )
             curr_rsi = 50.0
         else:
@@ -1085,7 +1090,14 @@ class MomentumStrategy:
         signals["vol_ratio"] = volume / vol_avg
 
         # RSI mean-reversion layer (standalone — no MA uptrend required for BUY)
+        # Warm-up period: 2 * rsi_period bars required to mitigate initialization bias.
         rsi = _compute_rsi(close, self.config.rsi_period)
+        warmup_len = 2 * self.config.rsi_period
+        if len(rsi) >= warmup_len:
+            rsi.iloc[:warmup_len - 1] = np.nan
+        else:
+            rsi[:] = np.nan
+
         signals["rsi"] = rsi
         rsi_buy = rsi < self.config.rsi_oversold    # oversold → buy the dip
         rsi_sell = rsi > self.config.rsi_overbought  # overbought → take profit
