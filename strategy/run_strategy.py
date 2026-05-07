@@ -372,6 +372,7 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
             counts["regime_spy_ma200"] = round(spy_ma200, 2)   # type: ignore[assignment]
 
         # ── Economic calendar — surface blackout / D-1 alert ─────────────────
+        calendar_blackout_active = False
         if strategy.config.calendar_filter:
             try:
                 from src.filters.economic_calendar import EconomicCalendar
@@ -381,6 +382,7 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
                 _block_reason = _cal.blackout_reason(_today)
                 if _block_reason:
                     print(f"  [CALENDAR] BLACKOUT — {_block_reason} — all BUYs blocked")
+                    calendar_blackout_active = True
                 _next = _cal.get_next_event(_today)
                 if _next:
                     _ev, _days = _next
@@ -395,7 +397,7 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
                         f"{_today.isoformat()} and {_tomorrow_ev.event_date.isoformat()}.",
                         level="WARNING",
                     )
-                counts["calendar_blackout"] = bool(_block_reason)         # type: ignore[assignment]
+                counts["calendar_blackout"] = calendar_blackout_active
                 counts["calendar_blackout_reason"] = _block_reason or ""  # type: ignore[assignment]
                 if _next:
                     counts["calendar_next_event"] = _next[0].kind.value   # type: ignore[assignment]
@@ -453,7 +455,10 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
                 print(f"  {symbol}: cannot determine current price")
                 continue
 
-            signal = strategy.generate_signal(symbol, df, portfolio_value=100_000.0)
+            import datetime as _dt
+            signal = strategy.generate_signal(
+                symbol, df, portfolio_value=100_000.0, as_of_date=_dt.date.today()
+            )
 
             trend_ride_flag = " [trend_ride]" if signal.features.get("trend_ride") else ""
             print(f"  {symbol:<10} → direction={signal.direction.value:<5} "
@@ -466,6 +471,12 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
 
             if signal.direction == Direction.HOLD:
                 print(f"  {symbol:<10}   HOLD — not sent to OMS")
+                continue
+
+            # Enforce calendar blackout at the runner level as a safety double-check.
+            # Only blocks BUY; SELL signals always pass (to allow exiting before the event).
+            if calendar_blackout_active and signal.direction == Direction.BUY:
+                print(f"  {symbol:<10}   HOLD — calendar blackout enforced by runner")
                 continue
 
             if dry_run:

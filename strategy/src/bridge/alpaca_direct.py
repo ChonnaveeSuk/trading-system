@@ -35,6 +35,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -56,6 +57,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_ENDPOINT = "https://paper-api.alpaca.markets/v2"
 _GCP_PROJECT = os.environ.get("GCP_PROJECT_ID", "quantai-trading-paper")
+
+# Fallback log for orders that couldn't be persisted to Postgres. Kept on the
+# local filesystem so a degraded DB never makes a live submission audit-blind.
+# Reconcile by replaying lines into orders table once the DB is healthy.
+_FAILED_ORDERS_LOG = "/tmp/quantai_failed_orders.jsonl"
 
 # Symbols not tradeable on Alpaca paper — skip order submission silently.
 _ALPACA_UNSUPPORTED = frozenset({"GBP-USD", "EUR-USD", "BNB-USD"})
@@ -136,27 +142,13 @@ def _from_alpaca_symbol(alpaca_symbol: str) -> str:
 
 # ── Credential loading ─────────────────────────────────────────────────────────
 
-def _gcloud_secret(secret_id: str) -> Optional[str]:
-    """Read a secret via gcloud CLI subprocess. Works locally (ADC) and on Cloud Run."""
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["gcloud", "secrets", "versions", "access", "latest",
-             f"--secret={secret_id}", f"--project={_GCP_PROJECT}"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return r.stdout.strip() if r.returncode == 0 else None
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return None
-
-
 def _load_credentials() -> tuple[str, str, str]:
     """Return (endpoint, api_key, secret_key).
 
     Priority:
       1. Env vars (ALPACA_API_KEY, ALPACA_SECRET_KEY)
-      2. gcloud CLI subprocess  (works locally + Cloud Run)
-      3. GCP Secret Manager Python SDK (ADC, Cloud Run service accounts)
+      2. GCP Secret Manager Python SDK via google.cloud.secretmanager
+         (ADC locally, attached service account on Cloud Run)
 
     Raises RuntimeError if credentials cannot be loaded.
     """
@@ -164,11 +156,6 @@ def _load_credentials() -> tuple[str, str, str]:
 
     api_key = os.environ.get("ALPACA_API_KEY")
     secret_key = os.environ.get("ALPACA_SECRET_KEY")
-
-    if not api_key:
-        api_key = _gcloud_secret("alpaca-api-key")
-    if not secret_key:
-        secret_key = _gcloud_secret("alpaca-secret-key")
 
     if not api_key or not secret_key:
         try:
@@ -179,7 +166,7 @@ def _load_credentials() -> tuple[str, str, str]:
                 secret_key = get_secret("alpaca-secret-key", _GCP_PROJECT)
         except Exception as e:
             raise RuntimeError(
-                f"Cannot load Alpaca credentials from env, gcloud, or Secret Manager: {e}"
+                f"Cannot load Alpaca credentials from env or Secret Manager: {e}"
             ) from e
 
     if not api_key:
@@ -329,8 +316,12 @@ class AlpacaDirectClient:
         """INSERT into orders table with status=SUBMITTED.
 
         Fills are recorded by reconcile_alpaca_fills.py after market open.
-        Non-fatal: DB failures log a warning but do not abort trading.
+        Non-fatal: DB failures fall back to a JSONL log on disk so that the
+        live order is never lost from the audit trail.
         """
+        now = datetime.now(timezone.utc)
+        failure_reason: Optional[str] = None
+
         try:
             from ..db import database_url
             db_url = database_url()
@@ -338,7 +329,6 @@ class AlpacaDirectClient:
 
             conn = psycopg2.connect(db_url)
             conn.autocommit = False
-            now = datetime.now(timezone.utc)
             try:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -370,15 +360,50 @@ class AlpacaDirectClient:
                     "Order recorded: %s %s %s qty=%s signal_type=%s (status=SUBMITTED)",
                     side, symbol, client_order_id[:12], qty, signal_type,
                 )
+                return
             except Exception as e:
                 conn.rollback()
-                logger.warning("Order DB insert failed (non-fatal): %s", e)
+                failure_reason = f"db_insert_failed: {e}"
+                logger.warning("Order DB insert failed: %s", e)
             finally:
                 conn.close()
-        except ImportError:
-            logger.warning("psycopg2 not available — skipping DB record")
+        except ImportError as e:
+            failure_reason = f"psycopg2_unavailable: {e}"
+            logger.warning("psycopg2 not available — falling back to JSONL log")
         except Exception as e:
-            logger.warning("DB connection failed (non-fatal): %s", e)
+            failure_reason = f"db_connect_failed: {e}"
+            logger.warning("DB connection failed: %s", e)
+
+        # ── Fallback: append to /tmp JSONL so the order is never lost ──────
+        record = {
+            "timestamp": now.isoformat(),
+            "client_order_id": client_order_id,
+            "broker_order_id": broker_order_id,
+            "symbol": symbol,
+            "side": side,
+            "order_type": "MARKET",
+            "quantity": str(qty),
+            "stop_loss": str(stop_loss),
+            "signal_score": signal_score,
+            "strategy_id": strategy_id,
+            "signal_type": signal_type,
+            "status": "SUBMITTED",
+            "failure_reason": failure_reason,
+        }
+        try:
+            with open(_FAILED_ORDERS_LOG, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+            logger.warning(
+                "Order persisted to fallback log %s (broker_id=%s)",
+                _FAILED_ORDERS_LOG, broker_order_id,
+            )
+        except OSError as fs_err:
+            # Last-resort: log at error so the line is at least in stdout/stderr
+            # and reachable via Cloud Logging.
+            logger.error(
+                "FALLBACK WRITE FAILED for %s (%s): %s | record=%s",
+                broker_order_id, fs_err, failure_reason, json.dumps(record),
+            )
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -707,28 +732,31 @@ class AlpacaDirectClient:
                     message="duplicate BUY within session",
                 )
 
-            # Guard 3 (Task 15): cross-invocation dedup — check for a pending order
-            # submitted in a previous Cloud Run invocation that has not yet been
-            # filled.  Such orders are invisible to _get_positions() but visible
-            # via GET /orders?status=open.  Non-fatal: if the API call fails we
-            # log a warning and proceed rather than blocking legitimate trades.
+            # Guard 3 (Task 15): cross-invocation dedup — block on ANY pending
+            # order (BUY or SELL) for this symbol from a previous invocation
+            # that has not yet been filled. Such orders are invisible to
+            # _get_positions() but visible via GET /orders?status=open. A
+            # pending SELL means we'd race a close-out; a pending BUY would
+            # double-up. Either way, skip and let the next run re-evaluate.
+            # Non-fatal: if the API call fails we log a warning and proceed
+            # rather than blocking legitimate trades.
             try:
                 open_orders = self._get_open_orders(alpaca_symbol)
                 time.sleep(_API_SLEEP_S)
-                pending_buys = [o for o in open_orders if o.get("side") == "buy"]
-                if pending_buys:
+                if open_orders:
+                    sides = sorted({o.get("side", "?") for o in open_orders})
                     logger.warning(
-                        "%s: %d pending BUY order(s) already exist — skipping "
-                        "(cross-invocation dedup guard)",
-                        signal.symbol, len(pending_buys),
+                        "%s: %d pending order(s) already exist (sides=%s) — "
+                        "skipping (cross-invocation dedup guard)",
+                        signal.symbol, len(open_orders), ",".join(sides),
                     )
                     return BridgeResponse(
                         accepted=False,
                         order_id="",
                         status="SKIPPED",
                         message=(
-                            f"pending BUY order already exists "
-                            f"({len(pending_buys)} open order(s))"
+                            f"pending order already exists "
+                            f"({len(open_orders)} open, sides={','.join(sides)})"
                         ),
                     )
             except Exception as e:

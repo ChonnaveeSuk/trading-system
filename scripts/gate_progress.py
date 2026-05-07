@@ -44,7 +44,7 @@ from _db import database_url as _database_url  # noqa: E402
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-PAPER_RUN_START = date(2026, 4, 7)
+PAPER_RUN_START = date(2026, 4, 29)
 PAPER_RUN_DAYS = 90
 
 # Gate thresholds (advisor recommendation 2026-05-06: profit factor

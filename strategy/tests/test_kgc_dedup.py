@@ -178,8 +178,14 @@ class TestPendingOrderBlocksNewBuy:
         assert result.order_id == "kgc-new-order"
         client._session.post.assert_called_once()
 
-    def test_pending_sell_order_does_not_block_buy(self):
-        """A pending SELL order for the same symbol should not block a BUY."""
+    def test_pending_sell_order_also_blocks_buy(self):
+        """A pending SELL for the same symbol must also block a new BUY.
+
+        Tightened policy (post-review): Guard 3 blocks on ANY open order
+        for the symbol, not just BUYs. A pending SELL means we are racing
+        a close-out — submitting a BUY against it produces the same kind
+        of crossed-orders mess Task-15 was meant to prevent.
+        """
         client = _make_client()
         client._session.get.side_effect = [
             _account_resp(),
@@ -194,7 +200,9 @@ class TestPendingOrderBlocksNewBuy:
             result = client.submit_signal(_kgc_buy_signal(), current_price=7.0)
 
         assert result is not None
-        assert result.accepted is True
+        assert result.accepted is False
+        assert result.status == "SKIPPED"
+        client._session.post.assert_not_called()
 
     def test_open_orders_api_failure_is_nonfatal(self):
         """If GET /orders fails, log warning and proceed (do not block trading)."""

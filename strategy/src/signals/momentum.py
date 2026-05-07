@@ -568,6 +568,7 @@ class MomentumStrategy:
         df: pd.DataFrame,
         portfolio_value: float = 100_000.0,
         position_pct: float = 0.02,      # Target 2% of portfolio per trade
+        as_of_date: Optional[date] = None,
     ) -> SignalResult:
         """Generate a trading signal from OHLCV bars.
 
@@ -576,6 +577,8 @@ class MomentumStrategy:
             df:              OHLCV DataFrame (index=timestamp, float64 columns).
             portfolio_value: Current portfolio value — used for position sizing.
             position_pct:    Fraction of portfolio to allocate (default 2%).
+            as_of_date:      Optional override for blackout date checks (live mode).
+                             If None, uses the date of the latest bar in `df`.
 
         Returns:
             SignalResult — always returns a result (HOLD if insufficient data
@@ -624,6 +627,16 @@ class MomentumStrategy:
                 score=0.0,
                 features={"reason": "nan_in_indicators"},
             )
+
+        # ── Date for blackout checks ──────────────────────────────────────────
+        # In live mode, the target execution date is often today, even if the
+        # latest OHLCV data is from yesterday's close.  Backtests use the
+        # latest bar date to remain self-contained.
+        if as_of_date is not None:
+            today = as_of_date
+        else:
+            latest_ts = df.index[-1]
+            today = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
 
         # ── RSI mean-reversion layer ──────────────────────────────────────────
         # Uses rsi_period from config (default 7 for speed, 14 for Wilder standard).
@@ -881,8 +894,6 @@ class MomentumStrategy:
             and direction == Direction.BUY
         ):
             try:
-                latest_ts = df.index[-1]
-                today = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
                 if self._calendar.is_blackout_day(today):
                     calendar_blocked_event = self._calendar.blackout_reason(today) or "blackout"
                     logger.info(
@@ -905,8 +916,6 @@ class MomentumStrategy:
             and direction == Direction.BUY
         ):
             try:
-                latest_ts = df.index[-1]
-                today = latest_ts.date() if hasattr(latest_ts, "date") else latest_ts
                 if self._earnings.is_blackout_day(symbol, today):
                     earnings_blocked_event = (
                         self._earnings.blackout_reason(symbol, today) or "earnings"

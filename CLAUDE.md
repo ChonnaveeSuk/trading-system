@@ -11,8 +11,9 @@
 **Strategy:** Sharpe 3.50 (backtest, equity-curve based), MaxDD 4.31%, ~749 THB/day on 16 tech-focused symbols
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
 
-**Phase 5 hardening (2026-04-24 / 2026-04-25 session):**
-- Task 15 — 3-layer dedup deployed (filled-positions + in-session set + pending orders) — image `runner:e9e973c+`
+**Phase 5 hardening (2026-05-06 session):**
+- FOMC blackout logic fixed: `run_strategy.py` now enforces the block and passes the current date to `MomentumStrategy.generate_signal` via `as_of_date` to prevent BUY orders on/before high-impact events when using yesterday's close data.
+- Task 15 — 3-layer dedup deployed — image `runner:e9e973c+`
 - daily_pnl false-drawdown P0 bug fixed + backfilled — Alpaca equity delta replaces cash-flow CASE; see [[ADR-001 daily_pnl equity delta fix]]
 - Reconcile resilience (`a047fb3`): migration 006 extends `orders.status` vocabulary to full Alpaca lifecycle, adds `_safe_update_order_status` with `conn.rollback()` to handle aborted-transaction trap, `_sync_positions_from_alpaca` runs independently of orders loop. See [[2026-04-25 reconcile constraint violation]].
 - Phase 5 observability complete: 6 Grafana dashboards (trading, strategy, health, A/B, sector, **gate progress** — new)
