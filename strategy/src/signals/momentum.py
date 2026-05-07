@@ -41,12 +41,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
+from ..filters.economic_calendar import EconomicCalendar, EarningsCalendar
 from . import Direction, SignalResult
 
 logger = logging.getLogger(__name__)
@@ -321,14 +323,12 @@ class MomentumStrategy:
         # Economic-calendar blackout filter (lazy-init; permissive when disabled)
         self._calendar = None
         if self.config.calendar_filter:
-            from ..filters.economic_calendar import EconomicCalendar
             self._calendar = EconomicCalendar(
                 blackout_days_before=self.config.calendar_blackout_days
             )
         # Earnings-calendar blackout filter (per-symbol, lazy-init)
         self._earnings = None
         if self.config.earnings_filter:
-            from ..filters.economic_calendar import EarningsCalendar
             self._earnings = EarningsCalendar(
                 blackout_days_before=self.config.earnings_blackout_days
             )
@@ -370,11 +370,10 @@ class MomentumStrategy:
         # Staleness check: warn if latest bar is more than 7 calendar days old.
         # Stale data during a correction could lock the regime in BEAR and block
         # all BUY signals even after the market recovers.
-        import datetime as _dt
         latest_date = spy_df.index[-1]
         if hasattr(latest_date, "date"):
             latest_date = latest_date.date()
-        data_age_days = (_dt.date.today() - latest_date).days
+        data_age_days = (date.today() - latest_date).days
         if data_age_days > 30:
             logger.warning(
                 "SPY data is %d days stale (latest bar: %s) — "
@@ -488,11 +487,10 @@ class MomentumStrategy:
         # Staleness check: stale VIXY during a calm-to-panic transition would
         # leave us trading under outdated permissive state.  >7 days = warn,
         # >30 days = ignore data and default to CALM.
-        import datetime as _dt
         latest_date = vixy_df.index[-1]
         if hasattr(latest_date, "date"):
             latest_date = latest_date.date()
-        data_age_days = (_dt.date.today() - latest_date).days
+        data_age_days = (date.today() - latest_date).days
         if data_age_days > 30:
             logger.warning(
                 "VIXY data is %d days stale (latest bar: %s) — VIX filter "
@@ -977,6 +975,16 @@ class MomentumStrategy:
                 quantity = Decimal(str(round(raw_qty, 0)))  # FX/cheap: whole units
             else:
                 quantity = Decimal(str(int(raw_qty)))       # Equities: whole shares
+
+            # Logging: warn if rounding error exceeds 1% of intended notional
+            if quantity is not None and raw_qty > 0:
+                rounding_error = abs(float(quantity) - raw_qty) / raw_qty
+                if rounding_error > 0.01:
+                    logger.warning(
+                        "%s: quantity rounding error %.2f%% exceeds 1%% of intended notional "
+                        "(intended %.4f → actual %s at price $%.2f)",
+                        symbol, rounding_error * 100, raw_qty, quantity, curr_price
+                    )
         else:
             quantity = None
 
