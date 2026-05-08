@@ -3,11 +3,14 @@
 
 ## Current Status
 
-**Phase:** 5 — 90-day paper trading IN PROGRESS (day 24/90, started 2026-04-07)
+**Phase:** 5 — 90-day paper trading IN PROGRESS (day 9/90, reset 2026-04-29)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-04-30 ICT (pre-May-4-BUY audit — sector dashboard rebucketed, BND swap completed, conftest.py added for test infra)
-**Tests:** 294/294 passing (47 Rust + 247 Python), 14 skipped, Clippy clean
+**Last updated:** 2026-05-07 ICT
+**Tests:** 260+ tests passing, 14 skipped, Clippy clean
 **GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
+**Live Positions:** NVDA (24 shares), META (8 shares)
+**Recent Fixes:** Security (no shell secrets), dedup guard, RSI warmup, test_trade flag, start-date drift fix.
+**Gate Criteria:** Sharpe > 1.0, MaxDD < 15%, Profit Factor > 1.5 (replaces win-rate) over 90 trading days.
 **Strategy:** Sharpe 3.50 (backtest, equity-curve based), MaxDD 4.31%, ~749 THB/day on 16 tech-focused symbols
 **Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
 

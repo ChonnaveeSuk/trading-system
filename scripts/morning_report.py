@@ -34,7 +34,7 @@ from _db import database_url as _database_url
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("morning_report")
 _SIGNALS_FILE = "/tmp/quantai_signals_today.json"
-_PAPER_START = date(2026, 4, 7)
+_PAPER_START = date(2026, 4, 29)
 _DEFAULT_OBSIDIAN_DAILY_DIR = (
     "/mnt/c/Users/Chonn/Obsidian/MyBrain/10 Projects/QuantAI/Daily"
 )
