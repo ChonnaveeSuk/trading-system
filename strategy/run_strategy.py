@@ -23,8 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import socket
 import sys
 import os
+
+# Set a default socket timeout so any HTTP/DB call without an explicit timeout
+# (e.g. yfinance/Alpaca/Telegram requests) cannot hang the Cloud Run job
+# indefinitely. 30s is generous for paper-trading APIs but bounded.
+socket.setdefaulttimeout(30)
 
 # Add the strategy directory to path when running as script
 sys.path.insert(0, os.path.dirname(__file__))
@@ -430,6 +436,7 @@ def run_live(symbols: list[str], dry_run: bool = False) -> None:
             counts["vix_level"] = round(vix_level, 2) # type: ignore[assignment]
             counts["vix_price"] = round(vix_price, 2) # type: ignore[assignment]
 
+        # TODO(phase6): batch fetch all symbols in single query
         for symbol in symbols:
             # 90 calendar days ≈ 63 trading days — enough for stable RSI(7)+ATR(14)
             # context and for trend_ride_min_bars consecutive-uptrend detection.

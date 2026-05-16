@@ -27,11 +27,10 @@ terraform {
     }
   }
 
-  # TODO: configure GCS backend for remote state before going live
-  # backend "gcs" {
-  #   bucket = "quantai-terraform-state"
-  #   prefix = "trading-system"
-  # }
+  backend "gcs" {
+    bucket = "quantai-trading-paper-tfstate"
+    prefix = "terraform/state"
+  }
 }
 
 provider "google" {

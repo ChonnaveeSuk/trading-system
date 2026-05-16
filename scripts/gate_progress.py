@@ -221,10 +221,19 @@ def _fetch_trade_count(cur) -> int:
 
 
 def _fetch_daily_pnl(cur) -> list[tuple[date, Decimal, Decimal]]:
-    """All daily_pnl rows since paper-run start, ending_value not null."""
+    """All daily_pnl rows since paper-run start, ending_value not null.
+
+    `realized_pnl` in `daily_pnl` is stored as a running cumulative total,
+    not a per-day delta.  Compute the per-day delta via LAG() so callers
+    (profit_factor, win/loss counts) get true day-over-day P&L.
+    """
     cur.execute(
         """
-        SELECT trading_date, ending_value, realized_pnl
+        SELECT
+          trading_date,
+          ending_value,
+          realized_pnl - LAG(realized_pnl, 1, 0)
+            OVER (ORDER BY trading_date) AS daily_realized_pnl
         FROM daily_pnl
         WHERE trading_date >= %s
           AND ending_value IS NOT NULL

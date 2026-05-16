@@ -3,16 +3,16 @@
 
 ## Current Status
 
-**Phase:** 5 — 90-day paper trading IN PROGRESS (day 9/90, reset 2026-04-29)
+**Phase:** 5 — 90-day paper trading IN PROGRESS (Day 13/90, reset 2026-04-29)
 **Mode:** PAPER TRADING ONLY
-**Last updated:** 2026-05-07 ICT
-**Tests:** 260+ tests passing, 14 skipped, Clippy clean
-**GCP:** quantai-trading-paper (asia-southeast1) — Pub/Sub + BigQuery + Secret Manager + Cloud SQL + Cloud Run LIVE
-**Live Positions:** NVDA (24 shares), META (8 shares)
-**Recent Fixes:** Security (no shell secrets), dedup guard, RSI warmup, test_trade flag, start-date drift fix.
-**Gate Criteria:** Sharpe > 1.0, MaxDD < 15%, Profit Factor > 1.5 (replaces win-rate) over 90 trading days.
-**Strategy:** Sharpe 3.50 (backtest, equity-curve based), MaxDD 4.31%, ~749 THB/day on 16 tech-focused symbols
-**Local WSL:** RETIRED 2026-04-15 — system runs fully on GCP Cloud Run Jobs
+**Last updated:** 2026-05-12 ICT
+**Equity:** $96,564 | **Cumulative P&L:** -$3,435
+**Live Positions:** META (8 shares, -$37), NVDA (1 share "dust" residual)
+**First Profitable Exit:** NVDA +$420 (2026-05-11). Lesson: Quantity rounding in exits can leave residual "dust" shares; requires logic refinement.
+**Gate Progress:** Sharpe -3.65 (recovery mode), MaxDD 0.03% ✅, Trades 8/30.
+**Upcoming Event:** CPI May 14 (Blackout May 13-14).
+**Strategy:** Sharpe 3.50 (backtest), ~749 THB/day on 16 tech-focused symbols.
+**GCP:** quantai-trading-paper (asia-southeast1) — Cloud Run Jobs LIVE.
 
 **Phase 5 hardening (2026-05-06 session):**
 - FOMC blackout logic fixed: `run_strategy.py` now enforces the block and passes the current date to `MomentumStrategy.generate_signal` via `as_of_date` to prevent BUY orders on/before high-impact events when using yesterday's close data.

@@ -57,3 +57,4 @@ logs/
 !strategy/src/data/**
 strategy/src/data/**/__pycache__/
 QuantAI_Session_Handoff_*.md
+*.bak

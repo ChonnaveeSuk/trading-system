@@ -725,6 +725,7 @@ def _build_report_data() -> ReportData:
         lines = ["\U0001f3af Sector Exposure"]
         by_s = sector_data["by_sector"]
         total = sector_data["total_notional"] or 1.0
+        total_positions = sum(info["count"] for info in by_s.values())
         warnings_lines: list[str] = []
         for sec, info in sorted(by_s.items(), key=lambda kv: -kv[1]["notional"]):
             pct = info["notional"] / total * 100
@@ -737,12 +738,19 @@ def _build_report_data() -> ReportData:
                     f"  \U0001f6a8 {sec} at {info['count']}/{sector_count_cap} "
                     f"position cap \u2014 new BUYs blocked"
                 )
-            if pct > sector_pct_cap:
+            # Suppress sector-cap pct warning when book has <3 positions:
+            # a 1- or 2-position book is necessarily concentrated (one name
+            # = 100%), so this warning is noise until the book is large
+            # enough to actually be diversifiable.
+            if pct > sector_pct_cap and total_positions >= 3:
                 warnings_lines.append(
                     f"  \u26a0 {sec} {pct:.0f}% of book > "
                     f"{sector_pct_cap:.0f}% sector cap"
                 )
-        if sector_data["largest_sector"]:
+        # Suppress HIGH CONCENTRATION warning when only 1\u20132 positions are open:
+        # a tiny book is *expected* to be concentrated, so the warning becomes
+        # noise. Real concentration risk requires >=3 positions to dilute into.
+        if sector_data["largest_sector"] and total_positions >= 3:
             name, pct = sector_data["largest_sector"]
             if pct > 50:
                 warnings_lines.append(
