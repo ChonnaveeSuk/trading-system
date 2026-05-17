@@ -49,6 +49,30 @@ QuantAI is a fully autonomous, production-grade algorithmic trading system that 
 - **Reliability:** 8 unique layers of protective gates (Regime, VIX, Earnings, Calendar, Trend, Stop-Loss, Sector, Position).
 - **Validation:** Automated 90-day gating mechanism requiring Sharpe > 1.0 and MaxDD < 15% for live promotion.
 
+## Paper Run Status (Day 18, as of 2026-05-17)
+
+The numbers below are reconciled against Alpaca account state via
+`migrations/008_reconcile_apr_pm_incident.sql`. They are reported as-is —
+the 2026-04-28 precious-metals concentration incident dominates the
+window and the engineering response (sector gate + hard stop loss) is
+the actual story:
+
+| Metric                | Value      | Note |
+|-----------------------|-----------:|------|
+| Cumulative P&L        | **-$3,256** | -$3,338 realized + $82 META unrealized |
+| Closed round-trips    | **12**     | 10 PM exits, 1 GLD exit, 1 NVDA win (+$441) |
+| Open positions        | **1**      | META, $82 unrealized |
+| Profit factor         | **0.117**  | Single concentration event dominates the denominator |
+| Max drawdown          | ~5%        | Bounded by hard stop loss; recovery in progress |
+| Days elapsed / 90     | 18 / 90    | Gate decision deferred until Day 90 |
+
+The profit factor of 0.117 is the brutal post-reconciliation truth. It
+is preserved here rather than smoothed because the value of the project
+is the *infrastructure response* — sector gate + hard equity stop +
+universe rebalance — not a pre-incident backtest figure. The 90-day gate
+is explicitly designed to fail-loud on exactly this kind of cluster
+risk, and it did.
+
 ## What I Would Do Differently
 1. **Adopt dbt/Polars Early:** Pandas became a memory bottleneck during deep hyperparameter sweeps. Polars would have vectorized the walk-forward testing 10x faster.
 2. **Start with a Simple Universe:** Beginning with 30 disparate symbols masked correlation risks. I should have built the sector limits before defining the asset pool.

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-On April 28, 2026, the QuantAI paper trading system experienced its first major failure since the Phase 5 gate began, realizing a cumulative -$4,825 drawdown. The system's entire portfolio capacity—10 out of 10 maximum open positions—became saturated exclusively with precious metal (PM) mining stocks. When the precious metals sector suffered an unexpected, correlated, intraday slide, the momentum strategy's slow-moving average (MA) exit signals failed to trigger fast enough, leading to severe and unchecked unrealized losses.
+On April 28, 2026, the QuantAI paper trading system experienced its first major failure since the Phase 5 gate began, realizing a cumulative -$3,733 drawdown. The system's entire portfolio capacity—10 out of 10 maximum open positions—became saturated exclusively with precious metal (PM) mining stocks. When the precious metals sector suffered an unexpected, correlated, intraday slide, the momentum strategy's slow-moving average (MA) exit signals failed to trigger fast enough, leading to severe and unchecked unrealized losses.
 
 The core business impact was a sharp 5.3% drawdown in paper equity, dragging the 90-day gate's Sharpe ratio from a healthy +1.39 to a failing -1.35 in a single trading session. To fix this, an emergency manual liquidation of the PM positions was performed. The universe was completely rebuilt, swapping the 30-symbol PM-heavy list for a 16-symbol tech-focused universe. Crucially, a hard sector concentration gate (maximum 3 positions or 30% notional exposure per sector) and an unrealized stop-loss monitor (-5%) were implemented directly into the live trading path to prevent recurrence.
 
@@ -16,7 +16,7 @@ The core business impact was a sharp 5.3% drawdown in paper equity, dragging the
 - **2026-04-23 → 2026-04-27:** The precious metals sector peaks and begins to roll over. The `slow_ma` in the strategy (set to 15 days) has not yet crossed over the `fast_ma` (5 days), so no SELL signals are generated.
 - **2026-04-28 13:30 (Market Open):** The precious metals sector experiences a sudden, highly correlated crash.
 - **2026-04-28 20:00:** The 10-position PM cluster bleeds past -$2,600 in unrealized losses. No automated stop-loss exists to override the MA crossover logic.
-- **2026-04-29 02:00:** The daily cron runs. The MA crossover finally triggers SELL signals for the PM positions, realizing a catastrophic -$4,825 cumulative loss. The equity curve plummets, and the Sharpe ratio drops to -1.35.
+- **2026-04-29 02:00:** The daily cron runs. The MA crossover finally triggers SELL signals for the PM positions, realizing a catastrophic -$3,733 cumulative loss. The equity curve plummets, and the Sharpe ratio drops to -1.35.
 - **2026-04-29 10:00:** Incident is officially declared. Trading is manually frozen.
 - **2026-04-29 14:00:** The legacy 30-symbol universe is retired.
 - **2026-04-30 22:00:** Patches for sector limits and hard stop-losses are deployed to `alpaca_direct.py` and `momentum.py`. The new 16-symbol tech-focused universe goes live.
@@ -25,7 +25,7 @@ The core business impact was a sharp 5.3% drawdown in paper equity, dragging the
 
 We use the 5 Whys methodology to drill down to the fundamental systemic failure:
 
-1. **Why did the portfolio lose -$4,825 in a single day?**
+1. **Why did the portfolio lose -$3,733 in a single day?**
    Because 10 out of 10 open positions suffered heavy losses simultaneously when the precious metals sector crashed.
 2. **Why did the system have 10 positions in the same sector?**
    Because the trading universe was fundamentally skewed (16 out of 30 symbols were PMs), and the momentum strategy indiscriminately bought them as they all trended up together.
@@ -70,7 +70,7 @@ Furthermore, to fix the lagging MA exits, we added a hard stop-loss trigger `che
 
 ## Impact Analysis
 
-- **Financial Impact:** Realized paper loss of -$4,825. Portfolio equity dropped by ~5.3% from its peak.
+- **Financial Impact:** Realized paper loss of -$3,733. Portfolio equity dropped by ~5.3% from its peak.
 - **Gate Metric Impact:** The Rolling 30-Day Sharpe ratio crashed below the 1.0 threshold (falling to -1.35). The Max Drawdown metric spiked above the 8% warning line but stayed under the fatal 15% line (peaking at ~8.86% under the old universe stats).
 - **Timeline Impact:** The strategy operated in a degraded, risk-heavy state for 7 days.
 - **Trust & Morale:** As the first major incident since the 90-day paper gate began, it highlighted a severe blind spot in how cross-sectional correlation affects backtest validity.
@@ -97,7 +97,7 @@ To ensure this class of failure never happens again, the following layers of def
 2. **Lagging Indicators Are Not Risk Controls:** Moving averages dictate entry and exit regimes, but they cannot act as capital preservation mechanisms during sudden crashes. A hard equity-based stop is non-negotiable.
 3. **Sector Caps Must Be Hardcoded:** Relying on universe diversification is insufficient. The execution engine itself must count the exposure and physically block the order.
 4. **Visibility Precedes Control:** Without the morning report surfacing unrealized losses on an individual symbol basis, the -$2,600 bleed went unnoticed until it was realized.
-5. **Failures in Paper are Features:** Losing $4,825 in paper money bought the system an architectural upgrade that will save real capital in Phase 6. The 90-day gate functioned exactly as intended.
+5. **Failures in Paper are Features:** Losing $3,733 in paper money bought the system an architectural upgrade that will save real capital in Phase 6. The 90-day gate functioned exactly as intended.
 
 ## Action Items Table
 
@@ -108,3 +108,42 @@ To ensure this class of failure never happens again, the following layers of def
 | **P0** | QuantAI Eng | Implement hard stop loss evaluator in `alpaca_direct.py`. | ✅ Done | 2026-04-30 |
 | **P1** | QuantAI Eng | Add Sector and Stop-Loss blocks to `morning_report.py`. | ✅ Done | 2026-05-02 |
 | **P1** | QuantAI Eng | Write automated integration tests for the sector concentration gate. | ⏳ Pending | 2026-05-10 |
+
+## 2026-05-17 Reconciliation Note
+
+A manual audit on 2026-05-17 revealed that the Postgres `orders` and `fills`
+tables were missing **11 SELL records** that had executed successfully on
+Alpaca — the 10 PM exit SELLs from 2026-04-29 and one GLD SELL from
+2026-05-01. The morning-report pipeline, the `daily_pnl` aggregator, and
+the `gate_progress` audit table had all been computing metrics against an
+incomplete picture for ~18 days.
+
+**Reconciled numbers (replaces all earlier estimates in this document):**
+
+- Realized P&L of the PM cluster on 2026-04-29: **-$3,732.67**
+  (per-trade, FIFO-matched from Alpaca fills — replaces the earlier
+  estimate of -$4,825)
+- Profit factor across the 12 closed round-trips since paper run start: **0.117**
+- Total realized P&L for the paper run: **-$3,337.67** (matches the
+  Alpaca cash math after removing a separate -$2,598 pre-paper testing
+  artifact that had been double-counted in `daily_pnl`)
+
+The reconciliation was applied via `migrations/008_reconcile_apr_pm_incident.sql`,
+which backfills the missing orders + fills, flags 6 PAPER-prefixed test
+records as `test_trade=true`, and recomputes `daily_pnl` and
+`gate_progress` from clean data.
+
+**Lesson — broker/DB reconciliation gap:** The existing
+`scripts/reconcile_alpaca_fills.py` only watches the open window; it does
+not detect or repair *historical* fill gaps. The PM SELLs from the
+incident itself never made it into Postgres because the live engine was
+in a degraded state during the cascade, and there was no after-the-fact
+"sweep" job to catch the omission. The cumulative drift between the
+DB-derived ledger and the Alpaca account-state ledger was not flagged
+because no automated invariant compares the two totals daily.
+
+**Follow-up task (open):** Add a daily reconcile-or-page job that
+compares `SUM(fills.qty * fills.price * sign(side))` against the Alpaca
+`/v2/account` equity delta — page on any drift > $50. This is the same
+class of check called out by Backlog Task 17 (equity-divergence monitor)
+and should ship together.
