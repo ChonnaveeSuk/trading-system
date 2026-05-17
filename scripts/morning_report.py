@@ -662,7 +662,12 @@ def _build_report_data() -> ReportData:
             "No signal data (strategy may not have run live)"
         )
     else:
-        sig_line = f"BUY:  {buy_count} | SELL: {sell_count} | HOLD: {hold_count}"
+        open_positions = int(pnl_data.get("open_positions", 0))
+        if sell_count > 0 and open_positions == 0:
+            sell_display = f"SELL: 0 actionable ({sell_count} raw)"
+        else:
+            sell_display = f"SELL: {sell_count}"
+        sig_line = f"BUY:  {buy_count} | {sell_display} | HOLD: {hold_count}"
         orders_submitted = int(signals_data.get("orders_submitted", 0))
         if orders_submitted > 0:
             sig_line += f"\nOrders submitted: {orders_submitted}"
